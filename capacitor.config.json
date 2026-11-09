@@ -1,0 +1,9 @@
+{
+  "appId": "th.chiangrai.roadofdays",
+  "appName": "Road of Days",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  }
+}

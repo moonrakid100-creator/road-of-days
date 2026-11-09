@@ -1,0 +1,28 @@
+{
+  "id": "th.chiangrai.roadofdays",
+  "name": "Road of Days · เส้นทางความทรงจำเชียงราย",
+  "short_name": "Road of Days",
+  "description": "ขับรถชมวิวเชียงราย 3D บันทึกความทรงจำประจำวัน และซิงก์ข้อมูลออนไลน์",
+  "lang": "th",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#294d41",
+  "theme_color": "#294d41",
+  "categories": ["lifestyle", "productivity", "games"],
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
