@@ -160,42 +160,64 @@
     else await saveOnline(true);
   };
 
-  // 1. ระบบ Login ด้วยชื่อเล่น
+  // 1. ตรวจสอบรหัสบัญชี (ไม่ใช้ prompt เพื่อให้รองรับมือถือ 100%)
   let myId = localStorage.getItem('road_uuid');
   if (!myId) {
-    let nickname = prompt('ยินดีต้อนรับสู่เส้นทางความทรงจำ!\n\nกรุณาตั้ง "ชื่อเล่น" หรือ "รหัสส่วนตัว"\nเพื่อใช้เซฟและดึงข้อมูลเมื่อคุณย้ายไปเล่นเครื่องอื่น\n(หากย้ายเครื่อง ให้พิมพ์ชื่อเดิม ข้อมูลจะกลับมาครับ):');
-    myId = (nickname && nickname.trim() !== '') ? 'user-' + nickname.trim() : 'user-' + Date.now().toString(36).slice(-6);
+    myId = 'user-' + Date.now().toString(36).slice(-6);
     localStorage.setItem('road_uuid', myId);
   }
 
-  // 2. แทรกปุ่ม "ย้ายเครื่อง / ล็อกอิน" เข้าไปในหน้าตั้งค่า (UI) อัตโนมัติ
+  // 2. แทรกกล่องตั้งชื่อและซิงก์ข้อมูล เข้าไปในหน้าตั้งค่า (Settings UI)
   setTimeout(() => {
     const exportRow = document.getElementById('exportBtn')?.closest('.settings-row');
-    if (exportRow && !document.getElementById('loginBtn')) {
-      const loginRow = document.createElement('div');
-      loginRow.className = 'settings-row';
-      loginRow.innerHTML = `
-        <div>บัญชีผู้ใช้ (คลาวด์)<div class="tiny">ชื่อปัจจุบัน: <strong id="currentUserName" style="color:#376951">${myId.replace(/^user-/, '')}</strong></div></div>
-        <button class="secondary" id="loginBtn" type="button" style="border-color:#376951; color:#376951;">ย้ายเครื่อง / ซิงก์ข้อมูล</button>
-      `;
-      exportRow.parentNode.insertBefore(loginRow, exportRow);
+    if (exportRow && !document.getElementById('cloudAccountBox')) {
+      const box = document.createElement('div');
+      box.id = 'cloudAccountBox';
+      box.className = 'settings-row';
+      box.style.cssText = 'flex-direction:column; align-items:stretch; gap:10px; background:rgba(45,107,79,0.08); padding:14px; border-radius:12px; border:1px solid rgba(45,107,79,0.25); margin-bottom:12px;';
       
-      document.getElementById('loginBtn').onclick = async () => {
-        let newName = prompt('ล็อกอินดึงข้อมูลคลาวด์\n\nกรุณาพิมพ์ "ชื่อเล่น" ที่คุณตั้งไว้ในเครื่องเก่า\n(ระบบจะโหลดพิกัดรถและบันทึกของคุณกลับมา):', myId.replace(/^user-/, ''));
-        if (newName && newName.trim() !== '') {
-          const targetId = 'user-' + newName.trim();
-          isReloading = true; // บล็อกไม่ให้ pagehide แอบเซฟข้อมูลว่างทับคลาวด์
-          isCloudSynced = false;
-          myId = targetId;
-          localStorage.setItem('road_uuid', targetId);
-          localStorage.removeItem(KEY); // ล้างแคชเก่าในเครื่องเพื่อรับข้อมูลจากคลาวด์
-          const nameEl = document.getElementById('currentUserName');
-          if (nameEl) nameEl.textContent = newName.trim();
-          closeModal('settingsModal');
-          toast(svgInline('clock') + ' กำลังดึงข้อมูลของ "' + newName.trim().replace(/[<>&]/g, '') + '" จากคลาวด์...');
-          isReloading = false;
-          await loadOnline();
+      const currentName = (myId || '').replace(/^user-/, '');
+      box.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <strong style="color:#2d6b4f; font-size:15px;">☁️ บัญชีซิงก์ข้อมูล (คลาวด์)</strong>
+            <div class="tiny">ใส่ชื่อเดียวกันทุกเครื่อง เพื่อให้ข้อมูลตรงกัน</div>
+          </div>
+          <span style="font-size:12px; font-weight:600; background:#2d6b4f; color:#fff; padding:3px 10px; border-radius:10px;" id="currentNickBadge">${currentName}</span>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <input type="text" id="nickInput" class="field" value="${currentName}" placeholder="พิมพ์ชื่อเล่นของคุณ (เช่น beer)" style="flex:1; padding:8px 12px; font-size:14px;">
+          <button type="button" class="primary" id="applySyncBtn" style="white-space:nowrap; padding:8px 16px;">ซิงก์ข้อมูล</button>
+        </div>
+        <div class="tiny" id="syncNotice" style="color:#666;">แตะ "ซิงก์ข้อมูล" เพื่อดึงบันทึกและพิกัดรถจากคลาวด์</div>
+      `;
+      exportRow.parentNode.insertBefore(box, exportRow);
+
+      document.getElementById('applySyncBtn').onclick = async () => {
+        const inputVal = document.getElementById('nickInput').value.trim();
+        const notice = document.getElementById('syncNotice');
+        if (!inputVal) {
+          if (typeof toast === 'function') toast('กรุณาพิมพ์ชื่อเล่นของคุณ');
+          return;
         }
+        const targetId = 'user-' + inputVal;
+        notice.textContent = '⏳ กำลังดึงข้อมูลของ "' + inputVal + '" จากคลาวด์...';
+        notice.style.color = '#2d6b4f';
+        
+        isReloading = true;
+        isCloudSynced = false;
+        myId = targetId;
+        localStorage.setItem('road_uuid', targetId);
+        localStorage.removeItem(KEY); // ล้างแคชเก่าเพื่อรับข้อมูลใหม่จากคลาวด์
+        
+        const badge = document.getElementById('currentNickBadge');
+        if (badge) badge.textContent = inputVal;
+        renderSyncStatus();
+        isReloading = false;
+        
+        await loadOnline();
+        notice.textContent = '✔️ ซิงก์ข้อมูลสำเร็จแล้ว!';
+        if (typeof toast === 'function') toast('✔️ เชื่อมต่อบัญชี "' + inputVal + '" เรียบร้อย');
       };
     }
   }, 1000);
