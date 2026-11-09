@@ -165,7 +165,60 @@
   if (!myId) {
     myId = 'user-' + Date.now().toString(36).slice(-6);
     localStorage.setItem('road_uuid', myId);
+    localStorage.removeItem('road_nick_set'); // ยังไม่เคยตั้งชื่อเล่นเอง
   }
+
+  // สลับไปใช้ชื่อเล่นที่ระบุ แล้วดึงข้อมูลจากคลาวด์ (ใช้ร่วมกันทั้งหน้าต้อนรับและหน้าตั้งค่า)
+  async function applyNickname(name) {
+    name = String(name || '').trim();
+    if (!name) return false;
+    isReloading = true; // บล็อกไม่ให้ pagehide แอบเซฟข้อมูลว่างทับคลาวด์
+    isCloudSynced = false;
+    myId = 'user-' + name;
+    localStorage.setItem('road_uuid', myId);
+    localStorage.setItem('road_nick_set', '1');
+    localStorage.removeItem(KEY); // ล้างแคชเก่าในเครื่องเพื่อรับข้อมูลจากคลาวด์
+    const badge = document.getElementById('currentNickBadge');
+    if (badge) badge.textContent = name;
+    const input = document.getElementById('nickInput');
+    if (input) input.value = name;
+    renderSyncStatus();
+    isReloading = false;
+    await loadOnline();
+    return true;
+  }
+
+  // หน้าต้อนรับ: ถามชื่อเล่นตอนเปิดแอปครั้งแรก (แทน prompt() ที่มือถือไม่แสดง)
+  setTimeout(() => {
+    if (localStorage.getItem('road_nick_set') === '1' || document.getElementById('welcomeNickOverlay')) return;
+    const ov = document.createElement('div');
+    ov.id = 'welcomeNickOverlay';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(20,40,32,.62);display:flex;align-items:center;justify-content:center;padding:20px;';
+    ov.innerHTML = `
+      <div role="dialog" aria-modal="true" style="background:#fffdf7;border-radius:20px;padding:24px;max-width:380px;width:100%;box-shadow:0 20px 50px rgba(0,0,0,.3);">
+        <h2 style="margin:0 0 8px;color:#2d6b4f;font-size:19px;">ยินดีต้อนรับสู่เส้นทางความทรงจำ!</h2>
+        <p style="margin:0 0 14px;font-size:14px;line-height:1.7;color:#444;">กรุณาตั้ง "ชื่อเล่น" หรือ "รหัสส่วนตัว" เพื่อใช้เซฟและดึงข้อมูล<br>หากย้ายเครื่อง ให้พิมพ์ชื่อเดิม ข้อมูลจะกลับมาครับ</p>
+        <input id="welcomeNickInput" class="field" type="text" placeholder="พิมพ์ชื่อเล่นของคุณ" maxlength="40" autocomplete="off" style="width:100%;padding:10px 12px;font-size:16px;box-sizing:border-box;">
+        <div id="welcomeNickMsg" class="tiny" style="margin:8px 0 12px;min-height:18px;color:#2d6b4f;"></div>
+        <button type="button" class="primary" id="welcomeNickOk" style="width:100%;padding:12px;">ตกลง</button>
+      </div>`;
+    document.body.appendChild(ov);
+    const inp = document.getElementById('welcomeNickInput');
+    const msg = document.getElementById('welcomeNickMsg');
+    const btn = document.getElementById('welcomeNickOk');
+    const submit = async () => {
+      const v = inp.value.trim();
+      if (!v) { msg.textContent = 'กรุณาพิมพ์ชื่อเล่นก่อนครับ'; return; }
+      btn.disabled = true;
+      msg.textContent = '⏳ กำลังดึงข้อมูลของ "' + v.replace(/[<>&]/g, '') + '" จากคลาวด์...';
+      await applyNickname(v);
+      ov.remove();
+      if (typeof toast === 'function') toast('✔️ เชื่อมต่อบัญชี "' + v.replace(/[<>&]/g, '') + '" เรียบร้อย');
+    };
+    btn.onclick = submit;
+    inp.onkeydown = e => { if (e.key === 'Enter') submit(); };
+    setTimeout(() => inp.focus(), 100);
+  }, 600);
 
   // 2. แทรกกล่องตั้งชื่อและซิงก์ข้อมูล เข้าไปในหน้าตั้งค่า (Settings UI)
   setTimeout(() => {
@@ -200,24 +253,12 @@
           if (typeof toast === 'function') toast('กรุณาพิมพ์ชื่อเล่นของคุณ');
           return;
         }
-        const targetId = 'user-' + inputVal;
-        notice.textContent = '⏳ กำลังดึงข้อมูลของ "' + inputVal + '" จากคลาวด์...';
+        notice.textContent = '⏳ กำลังดึงข้อมูลของ "' + inputVal.replace(/[<>&]/g, '') + '" จากคลาวด์...';
         notice.style.color = '#2d6b4f';
         
-        isReloading = true;
-        isCloudSynced = false;
-        myId = targetId;
-        localStorage.setItem('road_uuid', targetId);
-        localStorage.removeItem(KEY); // ล้างแคชเก่าเพื่อรับข้อมูลใหม่จากคลาวด์
-        
-        const badge = document.getElementById('currentNickBadge');
-        if (badge) badge.textContent = inputVal;
-        renderSyncStatus();
-        isReloading = false;
-        
-        await loadOnline();
+        await applyNickname(inputVal);
         notice.textContent = '✔️ ซิงก์ข้อมูลสำเร็จแล้ว!';
-        if (typeof toast === 'function') toast('✔️ เชื่อมต่อบัญชี "' + inputVal + '" เรียบร้อย');
+        if (typeof toast === 'function') toast('✔️ เชื่อมต่อบัญชี "' + inputVal.replace(/[<>&]/g, '') + '" เรียบร้อย');
       };
     }
   }, 1000);
