@@ -40,6 +40,18 @@ jobs:
         working-directory: ./android
         run: |
           chmod +x gradlew
+          
+          # สกัด URL ของ Gradle แล้วเปลี่ยนเป็น -bin.zip (ขนาดเล็กกว่าครึ่งหนึ่ง)
+          RAW_URL=$(grep 'distributionUrl=' gradle/wrapper/gradle-wrapper.properties | cut -d'=' -f2- | tr -d '\\')
+          BIN_URL=$(echo "$RAW_URL" | sed 's/-all.zip/-bin.zip/')
+          
+          echo "Downloading Gradle from $BIN_URL with curl..."
+          curl -fL --retry 5 --retry-delay 2 -o /tmp/gradle-dist.zip "$BIN_URL"
+          
+          # เปลี่ยนให้ Gradle Wrapper โหลดจากไฟล์ในเครื่องทันที ป้องกัน Timeout 100%
+          sed -i 's|distributionUrl=.*|distributionUrl=file\\:///tmp/gradle-dist.zip|' gradle/wrapper/gradle-wrapper.properties
+          
+          # บิลด์ไฟล์ APK
           ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK Artifact
