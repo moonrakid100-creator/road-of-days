@@ -222,6 +222,78 @@
     }
   }, 1000);
 
+  // 3. แจ้งเตือนบันทึกกิจกรรมทุกวัน 06:00 และ 18:00 (ทำงานเฉพาะในแอป APK / Capacitor)
+  (function setupDailyReminders() {
+    const LN = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications;
+    const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+    const PREF = 'road_reminder_on';
+    const REMINDERS = [
+      { id: 6001, hour: 6, title: '🌅 อรุณสวัสดิ์ยามเช้า · Road of Days', body: 'เริ่มต้นวันใหม่อย่างอ่อนโยน แวะมาบันทึกความรู้สึกยามเช้ากันเถอะ' },
+      { id: 18001, hour: 18, title: '🌇 พักใจยามเย็น · Road of Days', body: 'พระอาทิตย์เริ่มลับขอบฟ้าแล้ว แวะมาบันทึกเรื่องราวดี ๆ ของวันนี้กันนะ' }
+    ];
+
+    async function enable() {
+      const perm = await LN.requestPermissions();
+      if (perm.display !== 'granted') return false;
+      await LN.cancel({ notifications: REMINDERS.map(r => ({ id: r.id })) });
+      await LN.schedule({
+        notifications: REMINDERS.map(r => ({
+          id: r.id,
+          title: r.title,
+          body: r.body,
+          schedule: { on: { hour: r.hour, minute: 0 }, repeats: true, allowWhileIdle: true }
+        }))
+      });
+      return true;
+    }
+    async function disable() {
+      await LN.cancel({ notifications: REMINDERS.map(r => ({ id: r.id })) });
+    }
+
+    if (isNative && LN) {
+      // แตะการแจ้งเตือน → เปิดหน้าเขียนบันทึก
+      LN.addListener('localNotificationActionPerformed', () => {
+        setTimeout(() => document.getElementById('writeOpen')?.click(), 600);
+      });
+      // ตั้งเวลาใหม่ทุกครั้งที่เปิดแอป (ถ้าผู้ใช้ไม่ได้ปิดไว้)
+      if (localStorage.getItem(PREF) !== '0') enable().catch(() => {});
+    }
+
+    setTimeout(() => {
+      const anchor = document.getElementById('cloudAccountBox') || document.getElementById('exportBtn')?.closest('.settings-row');
+      if (!anchor || document.getElementById('reminderRow')) return;
+      const row = document.createElement('div');
+      row.className = 'settings-row';
+      row.id = 'reminderRow';
+      row.innerHTML = `
+        <div>แจ้งเตือนบันทึกประจำวัน<div class="tiny" id="reminderInfo">ทุกวันเวลา 06:00 และ 18:00 น.</div></div>
+        <input type="checkbox" class="switch" id="reminderSwitch" aria-label="แจ้งเตือนบันทึกประจำวัน">
+      `;
+      anchor.parentNode.insertBefore(row, anchor.nextSibling);
+      const sw = document.getElementById('reminderSwitch');
+      const info = document.getElementById('reminderInfo');
+      if (!(isNative && LN)) {
+        sw.disabled = true;
+        info.textContent = 'ใช้ได้เฉพาะในแอป APK บนมือถือ (ต้องติดตั้ง APK เวอร์ชันล่าสุด)';
+        return;
+      }
+      sw.checked = localStorage.getItem(PREF) !== '0';
+      sw.onchange = async () => {
+        try {
+          if (sw.checked) {
+            const ok = await enable();
+            if (!ok) { sw.checked = false; localStorage.setItem(PREF, '0'); info.textContent = 'ยังไม่ได้รับอนุญาตแจ้งเตือน (เปิดได้ที่ ตั้งค่ามือถือ > แอป)'; return; }
+            localStorage.setItem(PREF, '1');
+            info.textContent = 'ทุกวันเวลา 06:00 และ 18:00 น.';
+          } else {
+            await disable();
+            localStorage.setItem(PREF, '0');
+          }
+        } catch (e) { info.textContent = 'ตั้งค่าแจ้งเตือนไม่สำเร็จ'; }
+      };
+    }, 1300);
+  })();
+
   let state = {
       entries: [],
       lanterns: 0,
