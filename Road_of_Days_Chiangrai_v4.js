@@ -6206,8 +6206,6 @@
       lantern.position.set((i - 1.5) * 1.1, 1.5 + (i % 2) * 0.25, 1.1);
       templeFairGroup.add(lantern);
     }
-    createSimplePerson(0x5c8c72, templeFairGroup, -1.8, 0, 1.8);
-    createSimplePerson(0x9b6b9a, templeFairGroup, 1.8, 0, 1.8);
     scene.add(templeFairGroup);
     templeFairGroup.visible = false;
     window.dynamicEvents.push({
@@ -8224,6 +8222,251 @@
         }
       };
 
+      /* ===== งานวัด / เทศกาลทำบุญหน้าวัด =====
+       * กลางวัน: มีพระสงฆ์ ชาวบ้านร่วมทำบุญ พ่อค้าแม่ค้า และผู้คนเดินเที่ยวงาน (สร้างด้วยโมเดลคน human(o) สมจริง)
+       * กลางคืน: คนหายไปทั้งหมด เหลือร้านค้า ชิงช้าสวรรค์ และแสงไฟประดับงานวัด
+       * พื้นที่รอบวัดและหน้าวัดถูกจองไว้ ไม่ให้มีสวน/แปลงเกษตรมาวางทับ */
+      const _fairRoofGeo = new THREE.ConeGeometry(1.45, 0.7, 4),
+        _fairBulbM = new THREE.MeshBasicMaterial({ color: 0xffe08a }),
+        _fairLampM = new THREE.MeshBasicMaterial({ color: 0xff5a3c }),
+        _fairWoodM = sm2(0x8a5a2e),
+        _fairPoleM = sm2(0xc8a35c),
+        _fairGoldM = sm2(0xe6b92e),
+        _fairWhiteM = sm2(0xf7f1e3),
+        _fairFlagMs = [0xe63946, 0xf4a261, 0xf2c14e, 0x52b788, 0x4895ef, 0x9b5de5].map(
+          c => new THREE.MeshLambertMaterial({ color: c, side: THREE.DoubleSide })
+        ),
+        _fairFlagGeo = (() => {
+          const s = new THREE.Shape();
+          s.moveTo(-0.14, 0); s.lineTo(0.14, 0); s.lineTo(0, -0.36); s.closePath();
+          return new THREE.ShapeGeometry(s);
+        })();
+
+      const buildTempleFair = (ox, oz, rot) => {
+        const f = new THREE.Group();
+        f.position.set(ox, 0, oz);
+        f.rotation.y = rot; // +z (ในกรอบของ f) ชี้ไปทางถนน เหมือนซุ้มประตูวัด
+        scene.add(f);
+        const st = new THREE.Group(),
+          nightG = new THREE.Group();
+        f.add(st, nightG);
+        const ZC = 21.3; // กึ่งกลางลานงานตามแนวถนน
+
+        // พื้นลานงานและทางเดินสู่ประตูวัด
+        box(26, 0.04, 8.4, sm2(0xc9b383), 0, 0.02, ZC, st);
+        box(3.6, 0.06, 8.4, sm2(0xa65e44), 0, 0.04, ZC, st);
+
+        // ---------- ร้านค้า 4 ร้านขนาบทางเดิน (เรียงตรงเท่ากัน) ----------
+        const roofMs = [0xd9453a, 0xf4f0e6, 0xf2b33a, 0x3f8d72].map(c => new THREE.MeshLambertMaterial({ color: c, flatShading: true }));
+        const stalls = [];
+        const addStall = (x, z, ci) => {
+          const dir = x < 0 ? 1 : -1; // ทิศที่หน้าร้านหันเข้าหาทางเดิน
+          const s = new THREE.Group();
+          s.position.set(x, 0, z);
+          s.rotation.y = dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+          st.add(s);
+          for (const px of [-0.9, 0.9]) for (const pz of [-0.7, 0.7]) cyl(0.05, 0.055, 2.2, _fairPoleM, px, 1.1, pz, s);
+          const roof = new THREE.Mesh(_fairRoofGeo, roofMs[ci % 4]);
+          roof.position.y = 2.5;
+          roof.rotation.y = Math.PI / 4;
+          roof.scale.set(1, 1, 0.86);
+          roof.castShadow = true;
+          s.add(roof);
+          box(1.9, 0.2, 0.05, roofMs[(ci + 1) % 4], 0, 2.12, 0.74, s);
+          box(1.7, 0.85, 0.55, _fairWoodM, 0, 0.43, 0.45, s);
+          box(1.8, 0.05, 0.62, sm2(0xfff3d6), 0, 0.88, 0.45, s);
+          box(1.7, 0.08, 0.3, _fairWoodM, 0, 1.15, -0.55, s);
+          for (let k = 0; k < 5; k++) ball(0.11, _fairFlagMs[(k + ci) % 6], -0.7 + k * 0.35, 1.02, 0.45, s);
+          for (let k = 0; k < 4; k++) ball(0.09, _fairFlagMs[(k + ci + 2) % 6], -0.5 + k * 0.33, 1.28, -0.55, s);
+          stalls.push({ x, z, dir });
+        };
+        [20.2, 23.0].forEach((z, i) => {
+          addStall(-4.4, z, i);
+          addStall(4.4, z, i + 2);
+        });
+
+        // ---------- ธงราวข้ามทางเดิน + หลอดไฟ ----------
+        const strings = [20.2, 23.0];
+        const flagInst = _fairFlagMs.map(m => new THREE.InstancedMesh(_fairFlagGeo, m, strings.length * 5));
+        const flagCount = [0, 0, 0, 0, 0, 0],
+          dmy = new THREE.Object3D(),
+          bulbPts = [];
+        strings.forEach(z => {
+          const pts = [];
+          for (let i = 0; i <= 16; i++) {
+            const t = i / 16;
+            pts.push(new THREE.Vector3(-4.4 + 8.8 * t, 2.85 - 2.0 * t * (1 - t), z));
+            bulbPts.push([-4.4 + 8.8 * t, 2.85 - 2.0 * t * (1 - t) - 0.03, z]);
+          }
+          st.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x6b4a2a })));
+          for (let i = 0; i < 15; i++) {
+            const t = 0.04 + (i / 14) * 0.92,
+              ci = i % 6;
+            dmy.position.set(-4.4 + 8.8 * t, 2.85 - 2.0 * t * (1 - t), z);
+            dmy.rotation.set(0, 0, 0);
+            dmy.updateMatrix();
+            if (flagCount[ci] < strings.length * 5) flagInst[ci].setMatrixAt(flagCount[ci]++, dmy.matrix);
+          }
+        });
+        flagInst.forEach((m, i) => {
+          m.count = flagCount[i];
+          m.instanceMatrix.needsUpdate = true;
+          m.frustumCulled = false;
+          st.add(m);
+        });
+        // หลอดไฟหน้าร้านค้า (ติดชายคา)
+        stalls.forEach(s => {
+          for (const lx of [-0.8, -0.4, 0, 0.4, 0.8]) bulbPts.push([s.x + s.dir * 0.76, 2.0, s.z + lx]);
+        });
+        const bulbs = new THREE.InstancedMesh(new THREE.SphereGeometry(0.07, 5, 4), _fairBulbM, bulbPts.length);
+        bulbPts.forEach((p, i) => {
+          dmy.position.set(p[0], p[1], p[2]);
+          dmy.updateMatrix();
+          bulbs.setMatrixAt(i, dmy.matrix);
+        });
+        bulbs.instanceMatrix.needsUpdate = true;
+        bulbs.frustumCulled = false;
+        nightG.add(bulbs);
+
+        // ---------- ตุงล้านนาสองข้างทางเดิน ----------
+        [19.4, 21.6, 23.8].forEach((z, i) => {
+          for (const sx of [-2.1, 2.1]) {
+            cyl(0.035, 0.04, 3.6, _fairPoleM, sx, 1.8, z, st);
+            box(0.34, 1.5, 0.03, _fairFlagMs[(i * 2 + (sx > 0 ? 1 : 0)) % 6], sx + (sx > 0 ? -0.2 : 0.2), 2.75, z, st);
+          }
+        });
+
+        // ---------- ปะรำพิธีทำบุญ (ถวายสังฆทาน / แท่นพระพุทธรูป / อาสนะสงฆ์) ----------
+        const PVX = -12.2,
+          PVZ = ZC + 0.2;
+        const pv = new THREE.Group();
+        pv.position.set(PVX, 0, PVZ);
+        st.add(pv);
+        for (const px of [-2.2, 2.2]) for (const pz of [-3, 3]) cyl(0.08, 0.09, 2.9, _fairPoleM, px, 1.45, pz, pv);
+        box(5.0, 0.12, 6.8, _fairWhiteM, 0, 2.95, 0, pv);
+        const pvRoof = new THREE.Mesh(new THREE.ConeGeometry(4.2, 1.0, 4), _fairWhiteM);
+        pvRoof.position.y = 3.5;
+        pvRoof.rotation.y = Math.PI / 4;
+        pvRoof.scale.set(0.78, 1, 1.1);
+        pvRoof.castShadow = true;
+        pv.add(pvRoof);
+        ball(0.14, _fairGoldM, 0, 4.05, 0, pv);
+        const valM = sm2(0xe8802a);
+        box(0.06, 0.35, 6.8, valM, 2.5, 2.75, 0, pv);
+        box(0.06, 0.35, 6.8, valM, -2.5, 2.75, 0, pv);
+        box(5.0, 0.35, 0.06, valM, 0, 2.75, 3.4, pv);
+        box(5.0, 0.35, 0.06, valM, 0, 2.75, -3.4, pv);
+        box(4.6, 0.16, 6.4, sm2(0xb08a55), 0, 0.08, 0, pv); // แท่นพื้นไม้
+        box(4.2, 0.02, 5.8, sm2(0xb53a2a), 0, 0.17, 0, pv); // พรมแดง
+        // โต๊ะหมู่บูชาพร้อมพระพุทธรูปปางสมาธิสีทองและแจกันดอกบัว
+        box(0.85, 0.48, 2.2, sm2(0xf0e6d0), -1.85, 0.41, 0, pv);
+        box(0.92, 0.06, 2.28, _fairGoldM, -1.85, 0.66, 0, pv);
+        cyl(0.32, 0.38, 0.14, _fairGoldM, -1.85, 0.76, 0, pv); // ฐานบัว
+        ball(0.28, _fairGoldM, -1.85, 0.88, 0, pv, 0.9, 0.45, 1.35); // หน้าตักขัดสมาธิ
+        cyl(0.16, 0.22, 0.42, _fairGoldM, -1.85, 1.12, 0, pv); // พระวรกาย
+        ball(0.2, _fairGoldM, -1.85, 1.28, 0, pv, 0.85, 0.55, 1.28); // พระอังสา
+        ball(0.14, _fairGoldM, -1.85, 1.48, 0, pv, 0.95, 1.08, 0.95); // พระเศียร
+        ball(0.065, _fairGoldM, -1.85, 1.63, 0, pv); // พระเมาลี
+        cyl(0.01, 0.038, 0.14, _fairGoldM, -1.85, 1.73, 0, pv); // พระเกตุมาลา
+        for (const vz of [-0.85, 0.85]) {
+          cyl(0.06, 0.045, 0.22, _fairGoldM, -1.85, 0.79, vz, pv);
+          ball(0.09, _fairFlagMs[0], -1.85, 0.95, vz, pv, 0.85, 1.2, 0.85);
+        }
+        // อาสนะสงฆ์ 5 ที่นั่ง + ชุดสังฆทานหน้าพระสงฆ์
+        [-2.2, -1.1, 0, 1.1, 2.2].forEach(mz => {
+          box(0.68, 0.04, 0.72, _fairGoldM, -0.9, 0.2, mz, pv);
+          box(0.62, 0.02, 0.66, sm2(0x9b221a), -0.9, 0.23, mz, pv);
+          cyl(0.17, 0.21, 0.36, _fairFlagMs[1], -0.22, 0.36, mz + 0.25, pv);
+          ball(0.11, _fairGoldM, -0.22, 0.6, mz + 0.25, pv);
+        });
+        // ต้นผ้าป่า / ต้นเงินทำบุญ
+        {
+          const tx = -7.4,
+            tz = ZC + 2.1,
+            tm = new THREE.Group();
+          tm.position.set(tx, 0, tz);
+          st.add(tm);
+          box(0.5, 0.2, 0.5, _fairWoodM, 0, 0.1, 0, tm);
+          cyl(0.06, 0.08, 2.6, _fairWoodM, 0, 1.4, 0, tm);
+          cyl(0.03, 0.03, 1.8, _fairWoodM, 0, 2.3, 0, tm, 0, Math.PI / 2);
+          cyl(0.03, 0.03, 1.8, _fairWoodM, 0, 1.9, 0, tm, Math.PI / 2, 0);
+          ball(0.14, _fairGoldM, 0, 2.78, 0, tm);
+          [-0.75, -0.25, 0.25, 0.75].forEach((bx, i) => {
+            box(0.14, 0.22, 0.02, _fairFlagMs[i % 6], bx, 2.12, 0, tm);
+            box(0.02, 0.22, 0.14, _fairFlagMs[(i + 3) % 6], 0, 1.72, bx, tm);
+          });
+        }
+
+        // ---------- ชิงช้าสวรรค์ ----------
+        const WX = 13.2,
+          WY = 4.4,
+          WR = 3.1,
+          wgray = sm2(0xb8bcc0);
+        const wf = new THREE.Group();
+        wf.position.set(WX, 0, ZC + 0.2);
+        st.add(wf);
+        for (const lz of [-0.7, 0.7]) {
+          cyl(0.09, 0.12, 5.01, wgray, -1.2, 2.2, lz, wf, 0, -0.5);
+          cyl(0.09, 0.12, 5.01, wgray, 1.2, 2.2, lz, wf, 0, 0.5);
+        }
+        const wheel = new THREE.Group();
+        wheel.position.set(0, WY, 0);
+        wf.add(wheel);
+        cyl(0.25, 0.25, 1.8, wgray, 0, 0, 0, wheel, Math.PI / 2, 0);
+        for (const lz of [-0.7, 0.7]) {
+          const rim = new THREE.Mesh(new THREE.TorusGeometry(WR, 0.06, 5, 28), wgray);
+          rim.position.z = lz;
+          wheel.add(rim);
+          for (let k = 0; k < 4; k++) {
+            const sp = new THREE.Mesh(new THREE.BoxGeometry(0.06, WR * 2, 0.06), wgray);
+            sp.position.z = lz;
+            sp.rotation.z = (k * Math.PI) / 4;
+            wheel.add(sp);
+          }
+        }
+        const gondolas = [];
+        for (let k = 0; k < 8; k++) {
+          const ang = (k / 8) * Math.PI * 2,
+            gp = new THREE.Group();
+          gp.position.set(Math.cos(ang) * WR, Math.sin(ang) * WR, 0);
+          const hang = new THREE.Group();
+          gp.add(hang);
+          cyl(0.02, 0.02, 0.35, wgray, 0, -0.18, 0, hang);
+          box(0.95, 0.6, 1.1, _fairFlagMs[k % 6], 0, -0.62, 0, hang);
+          box(1.05, 0.08, 1.25, _fairWhiteM, 0, -0.28, 0, hang);
+          wheel.add(gp);
+          gondolas.push(hang);
+        }
+        const wheelBulbs = new THREE.InstancedMesh(new THREE.SphereGeometry(0.08, 5, 4), _fairBulbM, 48);
+        let wbi = 0;
+        for (const lz of [-0.7, 0.7])
+          for (let k = 0; k < 24; k++) {
+            const a = (k / 24) * Math.PI * 2;
+            dmy.position.set(Math.cos(a) * WR, Math.sin(a) * WR, lz);
+            dmy.updateMatrix();
+            wheelBulbs.setMatrixAt(wbi++, dmy.matrix);
+          }
+        wheelBulbs.instanceMatrix.needsUpdate = true;
+        wheelBulbs.frustumCulled = false;
+        wheelBulbs.visible = false;
+        wheel.add(wheelBulbs);
+
+        // ---------- โคมแดงที่ปะรำ (เปิดตอนกลางคืน) ----------
+        for (const lz of [-3.0, -1.5, 0, 1.5, 3.0]) ball(0.14, _fairLampM, PVX + 2.5, 2.5, PVZ + lz, nightG);
+        for (const lz of [-3.0, 3.0]) ball(0.14, _fairLampM, PVX - 2.5, 2.5, PVZ + lz, nightG);
+
+        window.dynamicEvents.push({
+          group: st,
+          condition: () => true,
+          update: dt => {
+            wheel.rotation.z -= dt * 0.2;
+            for (const gd of gondolas) gd.rotation.z = -wheel.rotation.z;
+            wheelBulbs.visible = !!state.night;
+          }
+        });
+        window.dynamicEvents.push({ group: nightG, condition: s => !!s.night });
+      };
+
       const templeTs = [0.14, 0.33, 0.52, 0.7, 0.842];
       for (const tVal of templeTs)
         patch([tVal], 30, 15, (o, sd) => {
@@ -8327,6 +8570,15 @@
         makeSacredPolygonTree(g, -4.3, 5.1, 0.96, true);   // ต้นโพธิ์เอกมุมหน้าซ้ายในลานวัด (พร้อมศาลและไม้ค้ำโพธิ์)
         makeSacredPolygonTree(g, 7.1, 4.2, 1.08, false);   // ต้นไทรใหญ่นอกกำแพงวัดฝั่งขวา
         makeSacredPolygonTree(g, -7.2, -3.6, 1.14, false); // ต้นโพธิ์ใหญ่นอกกำแพงวัดด้านหลังซ้าย
+
+        // 5. งานวัด/งานทำบุญหน้าวัด + จองพื้นที่รอบวัดและลานงานตลอดแนวกว้าง ไม่ให้สวน/แปลงเกษตรมาวางทับ
+        buildTempleFair(o.x, o.z, g.rotation.y);
+        taken.push([o.x, o.z, 28]);
+        const cosT = Math.cos(g.rotation.y),
+          sinT = Math.sin(g.rotation.y);
+        for (const lx of [-14, -7, 0, 7, 14]) {
+          taken.push([o.x + lx * cosT + 21.3 * sinT, o.z - lx * sinT + 21.3 * cosT, 12]);
+        }
       });
       patch([0.15, 0.45, 0.76], 6.4, 2.4, (o, sd) => {
         const g = mk(o.x, o.z);
@@ -12423,7 +12675,7 @@
       if (key !== _lastPlaceTxt) {
         if (!_placeLabelEl) _placeLabelEl = $('placeLabel');
         if (_placeLabelEl) {
-          if (ic) _placeLabelEl.innerHTML = svgInline(ic) + '<span>' + esc(txt) + '</span>';
+          if (ic) _placeLabelEl.innerHTML = svgInline(ic) + '<span>' + String(txt).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])) + '</span>';
           else _placeLabelEl.textContent = txt;
           _lastPlaceTxt = key;
         }
@@ -15286,19 +15538,21 @@
 
       zoneIdx.push(crowd.length);
       // ================= โซน 2: ไร่ข้าวโพดยกร่องสลับสวนฟักทองเป็นระยะ (t: 0.658 - 0.752) =================
-      const pumpkinOrangeM = new THREE.MeshLambertMaterial({ color: 0xed6a14, flatShading: true }),
-        pumpkinGoldM = new THREE.MeshLambertMaterial({ color: 0xdf9820, flatShading: true }),
-        pumpkinGreenM = new THREE.MeshLambertMaterial({ color: 0x2e5e2c, flatShading: true }),
-        pumpkinCreamM = new THREE.MeshLambertMaterial({ color: 0xebd3a8, flatShading: true }),
-        pumpkinVineM = new THREE.MeshLambertMaterial({ color: 0x487a32, flatShading: true }),
-        pumpkinLeafM = new THREE.MeshLambertMaterial({ color: 0x366e2c, flatShading: true }),
-        pumpkinStemM = new THREE.MeshLambertMaterial({ color: 0x3d5426, flatShading: true }),
-        pumpkinFlowerM = new THREE.MeshLambertMaterial({ color: 0xffbe1a, flatShading: true }),
+      // วัสดุฟักทองแบบผิวเรียบนุ่ม (ไม่ใช้ flatShading) เพื่อให้พูฟักทองดูโค้งมนสมจริง
+      const pumpkinOrangeM = new THREE.MeshLambertMaterial({ color: 0xe8701a }),
+        pumpkinGoldM = new THREE.MeshLambertMaterial({ color: 0xe0a024 }),
+        pumpkinGreenM = new THREE.MeshLambertMaterial({ color: 0x4d7a3a }),
+        pumpkinCreamM = new THREE.MeshLambertMaterial({ color: 0xe9d3a6 }),
+        pumpkinVineM = new THREE.MeshLambertMaterial({ color: 0x4f8236 }),
+        pumpkinLeafM = new THREE.MeshLambertMaterial({ color: 0x3f7d2f, side: THREE.DoubleSide }),
+        pumpkinLeafM2 = new THREE.MeshLambertMaterial({ color: 0x356b29, side: THREE.DoubleSide }),
+        pumpkinStemM = new THREE.MeshLambertMaterial({ color: 0x5a6b2e }),
+        pumpkinFlowerM = new THREE.MeshLambertMaterial({ color: 0xffbe1a }),
         bambooPoleM = sm2(0xc8a35c);
 
       // สร้าง Geometry ฟักทองสไตล์ Low-Poly ทรง 8 พูคมชัด (แคชใช้ซ้ำได้ประสิทธิภาพสูง)
       const pumpkinLowPolyGeo = (() => {
-        const base = new THREE.SphereGeometry(1, 16, 8);
+        const base = new THREE.SphereGeometry(1, 28, 16);
         const pos = base.attributes.position;
         for (let i = 0; i < pos.count; i++) {
           const x = pos.getX(i);
@@ -15306,57 +15560,68 @@
           const z = pos.getZ(i);
           const theta = Math.atan2(z, x);
           const rH = Math.hypot(x, z);
-          // ทำพูฟักทอง 8 พูรอบผลแบบโพลิก้อน
-          const rib = 1.0 + 0.22 * Math.cos(8 * theta);
+          // ร่องพูฟักทอง 9 พู ไล่จากขั้วถึงก้นแบบธรรมชาติ (ร่องลึกที่ศูนย์สูตร จางลงที่ขั้ว)
+          const rib = 1.0 + 0.11 * Math.cos(9 * theta) * rH;
           const newR = rH * rib;
           pos.setX(i, Math.cos(theta) * newR);
           pos.setZ(i, Math.sin(theta) * newR);
           // ทรงแป้นเตี้ย + รอยบุ๋มตรงขั้วและก้น
           const poleDist = Math.abs(y);
-          const dent = poleDist > 0.65 ? (poleDist - 0.65) * 0.35 : 0;
-          pos.setY(i, y * 0.72 - Math.sign(y) * dent);
+          const dent = poleDist > 0.6 ? (poleDist - 0.6) * 0.42 : 0;
+          pos.setY(i, y * 0.8 - Math.sign(y) * dent);
         }
-        const nonIndexed = base.toNonIndexed();
-        nonIndexed.computeVertexNormals();
-        return nonIndexed;
+        base.computeVertexNormals();
+        return base;
       })();
 
-      const pumpkinStemGeo = new THREE.CylinderGeometry(0.09, 0.16, 0.44, 5);
-      const pumpkinCalyxGeo = new THREE.CylinderGeometry(0.24, 0.02, 0.06, 5);
-      const pumpkinLeafGeo = new THREE.CylinderGeometry(0.25, 0.25, 0.02, 5);
-      const pumpkinFlowerGeo = new THREE.CylinderGeometry(0.085, 0.02, 0.11, 5, 1, false);
+      // ใบฟักทองห้าแฉกแบบหยักโค้ง วางราบเรียบกับพื้น (ด้านบนหงายขึ้น)
+      const pumpkinLeafGeo = (() => {
+        const sh = new THREE.Shape();
+        const N = 40;
+        for (let i = 0; i <= N; i++) {
+          const a = (i / N) * Math.PI * 2;
+          const r = 0.27 * (0.74 + 0.26 * Math.cos(5 * (a - Math.PI / 2)));
+          const px = Math.cos(a) * r,
+            py = Math.sin(a) * r;
+          if (i === 0) sh.moveTo(px, py);
+          else sh.lineTo(px, py);
+        }
+        return new THREE.ShapeGeometry(sh).rotateX(-Math.PI / 2);
+      })();
 
-      const addPumpkinFruit = (parent, px, py, pz, rad, mat) => {
+      const pumpkinStemGeo = new THREE.CylinderGeometry(0.08, 0.15, 0.44, 6);
+      const pumpkinCalyxGeo = new THREE.CylinderGeometry(0.26, 0.02, 0.06, 8);
+      const pumpkinFlowerGeo = new THREE.ConeGeometry(0.1, 0.18, 6, 1, true);
+
+      const addPumpkinFruit = (parent, px, py, pz, rad, mat, rotY) => {
         const pg = new THREE.Group();
-        pg.position.set(px, py + rad * 0.65, pz);
-        pg.rotation.y = LR() * 6.28;
-        pg.rotation.z = (LR() - 0.5) * 0.18;
+        pg.position.set(px, py + rad * 0.64, pz);
+        pg.rotation.y = rotY !== undefined ? rotY : LR() * 6.28;
         parent.add(pg);
 
-        // ผลฟักทอง Low-Poly ผิว Faceted คมชัดเข้ากับธีม
         const pmesh = new THREE.Mesh(pumpkinLowPolyGeo, mat);
         pmesh.scale.set(rad, rad, rad);
         pmesh.castShadow = true;
         pmesh.receiveShadow = true;
         pg.add(pmesh);
 
-        // ฐานขั้ว 5 แฉก
+        // ฐานขั้ว
         const calyx = new THREE.Mesh(pumpkinCalyxGeo, pumpkinStemM);
-        calyx.position.set(0, rad * 0.64, 0);
+        calyx.position.set(0, rad * 0.6, 0);
         calyx.scale.set(rad, rad, rad);
         pg.add(calyx);
 
-        // ก้านขั้วโพลิก้อน 5 เหลี่ยมโค้งงอ
+        // ก้านขั้ว
         const stem = new THREE.Mesh(pumpkinStemGeo, pumpkinStemM);
         stem.position.set(rad * 0.04, rad * 0.82, 0);
         stem.scale.set(rad, rad, rad);
-        stem.rotation.z = 0.28;
-        stem.rotation.x = (LR() - 0.5) * 0.25;
+        stem.rotation.z = 0.18;
         pg.add(stem);
         return pg;
       };
       let cornPlotCount = 0;
       for (let t = 0.658; t < 0.752; t += 0.008) {
+        if (window.__TEMPLES && window.__TEMPLES.some(tp => Math.abs(t - tp.t) < 0.016)) continue;
         for (const sd of [-1, 1]) {
           for (let tier = 0; tier < 2; tier++) {
             const off = sd * (10.5 + tier * 8.6),
@@ -15381,50 +15646,41 @@
               plot.add(ridge);
 
               if (isPumpkinPatch) {
-                // แปลงสวนฟักทอง: เถาฟักทองเลื้อยตามร่องดิน ใบฟักทองโพลิก้อน 5 เหลี่ยม ดอกฟักทอง และลูกฟักทองโพลิก้อน
-                const vineMain = cyl(0.022, 0.025, 6.8, pumpkinVineM, rx, 0.14, 0, plot);
+                // แปลงสวนฟักทอง: จัดเรียงเป็นตารางเท่ากันทุกแถว (แถวละ 5 ต้น ห่างกัน 1.5 ม.) ตรงกับสันร่องดิน
+                const ix = Math.round((rx + 2.7) / 1.8);
+                const vineMain = cyl(0.026, 0.03, 6.6, pumpkinVineM, rx, 0.2, 0, plot);
                 vineMain.rotation.x = Math.PI / 2;
-                for (let cz = -3.0; cz <= 3.01; cz += 1.2) {
-                  const vx = rx + (LR() - 0.5) * 0.55,
-                    vz = cz + (LR() - 0.5) * 0.25;
+                for (let iz = 0; iz < 5; iz++) {
+                  const cz = -3.0 + iz * 1.5,
+                    seq = ix + iz;
 
-                  // เถาแขนงเลื้อยแตกกิ่ง
-                  if (LR() < 0.65) {
-                    const vineBranch = cyl(0.015, 0.018, 0.85, pumpkinVineM, vx, 0.10, vz, plot);
-                    vineBranch.rotation.y = LR() * 6.28;
-                    vineBranch.rotation.z = Math.PI / 2;
-                  }
-
-                  // ใบฟักทองโพลิก้อน 5 เหลี่ยมพร้อมก้านชูขึ้น (Low-Poly Foliage)
-                  for (let lf = 0; lf < 2; lf++) {
-                    const lx = vx + (lf ? 0.26 : -0.24) + (LR() - 0.5) * 0.15,
-                      lz = vz + (LR() - 0.5) * 0.25,
-                      leafR = 0.20 + LR() * 0.08;
-                    const lg = new THREE.Group();
-                    lg.position.set(lx, 0.18 + LR() * 0.05, lz);
-                    lg.rotation.set((LR() - 0.5) * 0.55, LR() * 6.28, (LR() - 0.5) * 0.55);
-                    const lmesh = new THREE.Mesh(pumpkinLeafGeo, pumpkinLeafM);
-                    lmesh.scale.set(leafR / 0.25, 1, leafR / 0.25);
+                  // กอใบฟักทอง 3 ใบกางรอบโคนต้น วางราบและหงายรับแสง
+                  for (let lf = 0; lf < 3; lf++) {
+                    const ang = lf * 2.094 + seq * 0.7,
+                      lx = rx + Math.cos(ang) * 0.34,
+                      lz = cz + Math.sin(ang) * 0.34;
+                    const lmesh = new THREE.Mesh(pumpkinLeafGeo, lf % 2 ? pumpkinLeafM2 : pumpkinLeafM);
+                    lmesh.position.set(lx, 0.27 + lf * 0.02, lz);
+                    lmesh.rotation.set(Math.sin(ang) * 0.14, ang + 1.57, -Math.cos(ang) * 0.14);
+                    const ls = 0.95 + (seq % 3) * 0.1;
+                    lmesh.scale.set(ls, 1, ls);
                     lmesh.castShadow = true;
-                    lg.add(lmesh);
-                    cyl(0.012, 0.015, 0.18, pumpkinVineM, 0, -0.08, 0, lg, 0.25, 0);
-                    plot.add(lg);
+                    plot.add(lmesh);
                   }
 
-                  // ดอกฟักทองสีเหลืองสดทรงโพลิก้อน 5 แฉก
-                  if (LR() < 0.45) {
+                  // ดอกฟักทองสีเหลือง (ทุกต้นที่ 3)
+                  if (seq % 3 === 0) {
                     const fl = new THREE.Mesh(pumpkinFlowerGeo, pumpkinFlowerM);
-                    fl.position.set(vx + 0.15, 0.22, vz + 0.12);
-                    fl.rotation.x = (LR() - 0.5) * 0.4;
-                    fl.rotation.z = (LR() - 0.5) * 0.4;
+                    fl.position.set(rx + 0.1, 0.34, cz + 0.12);
                     plot.add(fl);
                   }
 
-                  // ลูกฟักทองโพลิก้อนวางตามเถาในแปลง
-                  if (LR() < 0.78) {
-                    const pMat = pk([pumpkinOrangeM, pumpkinOrangeM, pumpkinGoldM, pumpkinGreenM, pumpkinCreamM]),
-                      pRad = 0.22 + LR() * 0.15;
-                    addPumpkinFruit(plot, vx + (LR() - 0.5) * 0.35, 0.02, vz, pRad, pMat);
+                  // ลูกฟักทองวางบนพื้นดินข้างต้น สลับซ้าย-ขวาของร่องอย่างเป็นระเบียบ
+                  if (seq % 3 !== 2) {
+                    const side = seq % 2 ? 1 : -1,
+                      pRad = [0.26, 0.3, 0.24, 0.28][seq % 4],
+                      pMat = [pumpkinOrangeM, pumpkinOrangeM, pumpkinGoldM, pumpkinOrangeM, pumpkinGreenM, pumpkinCreamM][seq % 6];
+                    addPumpkinFruit(plot, rx + side * 0.62, 0.06, cz + 0.72, pRad, pMat, seq * 0.9);
                   }
                 }
               } else {
@@ -15438,21 +15694,32 @@
               }
             }
 
-            // ซุ้มค้างไม้ไผ่สำหรับแปลงฟักทอง
+            // โครงค้างไม้ไผ่: เสาตั้งตรงคู่ 3 ชุด คานพาดบนยอด และรางยาวต่อกัน (ทุกชิ้นพิกัดตรงกัน ไม่เอียง)
             if (isPumpkinPatch) {
-              for (const tz of [-2.2, 2.2]) {
-                const pL = cyl(0.035, 0.04, 1.55, bambooPoleM, -0.85, 0.72, tz, plot),
-                  pR = cyl(0.035, 0.04, 1.55, bambooPoleM, 0.85, 0.72, tz, plot);
-                pL.rotation.z = -0.36;
-                pR.rotation.z = 0.36;
+              const tH = 1.7; // ความสูงโครง
+              for (const tz of [-3.0, 0, 3.0]) {
+                cyl(0.04, 0.045, tH, bambooPoleM, -1.8, tH / 2, tz, plot);
+                cyl(0.04, 0.045, tH, bambooPoleM, 1.8, tH / 2, tz, plot);
+                cyl(0.032, 0.032, 3.76, bambooPoleM, 0, tH, tz, plot, 0, Math.PI / 2); // คานขวาง
               }
-              const topBar = cyl(0.032, 0.032, 4.8, bambooPoleM, 0, 1.38, 0, plot);
-              topBar.rotation.x = Math.PI / 2;
+              cyl(0.032, 0.032, 6.2, bambooPoleM, -1.8, tH, 0, plot, Math.PI / 2, 0); // รางยาวซ้าย
+              cyl(0.032, 0.032, 6.2, bambooPoleM, 1.8, tH, 0, plot, Math.PI / 2, 0); // รางยาวขวา
 
-              // เถาเลื้อยและฟักทองลูกเล็กห้อยจากซุ้มไม้ไผ่
-              for (const hz of [-1.2, 0.3, 1.6]) {
-                cyl(0.012, 0.014, 0.42, pumpkinVineM, 0, 1.16, hz, plot);
-                addPumpkinFruit(plot, 0, 0.88, hz, 0.15, pk([pumpkinOrangeM, pumpkinGoldM, pumpkinGreenM]));
+              // เถาเลื้อยพาดคานแต่ละชุด พร้อมใบเรียงเท่ากันและฟักทองลูกเล็กห้อยด้วยเชือก
+              for (const tz of [-3.0, 0, 3.0]) {
+                cyl(0.022, 0.022, 3.5, pumpkinVineM, 0, tH + 0.04, tz, plot, 0, Math.PI / 2);
+                for (const lx of [-1.35, -0.45, 0.45, 1.35]) {
+                  const lmesh = new THREE.Mesh(pumpkinLeafGeo, pumpkinLeafM);
+                  lmesh.position.set(lx, tH + 0.08, tz + (lx > 0 ? 0.14 : -0.14));
+                  lmesh.scale.set(0.9, 1, 0.9);
+                  lmesh.rotation.y = lx * 1.3;
+                  plot.add(lmesh);
+                }
+                for (const hx of [-0.9, 0.9]) {
+                  const hRad = 0.17;
+                  cyl(0.008, 0.008, 0.32, pumpkinVineM, hx, tH - 0.16, tz, plot);
+                  addPumpkinFruit(plot, hx, tH - 0.32 - 1.04 * hRad - 0.64 * hRad, tz, hRad, hx > 0 ? pumpkinOrangeM : pumpkinGoldM, tz);
+                }
               }
             }
 
@@ -15466,13 +15733,27 @@
               box(0.06, 0.07, 7.3, fenceWoodM, fx, 0.35, 0, plot);
 
               if (isPumpkinPatch) {
-                // แคร่ไม้และกองฟักทองโพลิก้อนหลากสีที่เก็บเกี่ยววางเรียงริมรั้วหน้าสวนฟักทอง
-                box(1.05, 0.1, 1.6, crateWoodM, fx + sd * 0.58, 0.06, -1.6, plot);
-                addPumpkinFruit(plot, fx + sd * 0.55, 0.11, -1.95, 0.30, pumpkinOrangeM);
-                addPumpkinFruit(plot, fx + sd * 0.62, 0.11, -1.42, 0.27, pumpkinGoldM);
-                addPumpkinFruit(plot, fx + sd * 0.48, 0.11, -1.05, 0.25, pumpkinGreenM);
-                addPumpkinFruit(plot, fx + sd * 0.56, 0.38, -1.68, 0.24, pumpkinCreamM);
-                addPumpkinFruit(plot, fx + sd * 0.72, 0.02, -0.65, 0.28, pumpkinOrangeM);
+                // ลังไม้เปิดบนใส่ฟักทอง: ก้นลัง + แผ่นข้าง 4 ด้าน + ฟักทองเรียงเป็นตาราง 2×3 ชั้นล่าง และ 2 ลูกชั้นบน
+                const cx = fx + sd * 0.8,
+                  cz0 = -1.6;
+                box(1.1, 0.08, 1.7, crateWoodM, cx, 0.04, cz0, plot);
+                box(1.1, 0.34, 0.06, crateWoodM, cx, 0.2, cz0 - 0.82, plot);
+                box(1.1, 0.34, 0.06, crateWoodM, cx, 0.2, cz0 + 0.82, plot);
+                box(0.06, 0.34, 1.7, crateWoodM, cx - 0.52, 0.2, cz0, plot);
+                box(0.06, 0.34, 1.7, crateWoodM, cx + 0.52, 0.2, cz0, plot);
+                const lowMats = [pumpkinOrangeM, pumpkinGoldM, pumpkinOrangeM, pumpkinOrangeM, pumpkinCreamM, pumpkinOrangeM];
+                let li = 0;
+                for (const dz of [-0.52, 0, 0.52]) {
+                  for (const dx of [-0.26, 0.26]) {
+                    addPumpkinFruit(plot, cx + dx, 0.08, cz0 + dz, 0.23, lowMats[li], li * 1.1);
+                    li++;
+                  }
+                }
+                addPumpkinFruit(plot, cx, 0.34, cz0 - 0.26, 0.2, pumpkinOrangeM, 0.4);
+                addPumpkinFruit(plot, cx, 0.34, cz0 + 0.26, 0.2, pumpkinGreenM, 1.9);
+                // ฟักทองใหญ่วางบนพื้นข้างลัง
+                addPumpkinFruit(plot, cx, 0.02, cz0 + 1.4, 0.32, pumpkinOrangeM, 0.7);
+                addPumpkinFruit(plot, cx + sd * 0.05, 0.02, cz0 + 2.0, 0.24, pumpkinGoldM, 2.2);
               } else if (cornPlotCount % 2 === 0) {
                 box(0.85, 0.1, 1.3, crateWoodM, fx + sd * 0.55, 0.06, -1.8, plot);
                 ball(0.28, sackClothM, fx + sd * 0.55, 0.28, -2.0, plot, 1, 0.85, 1.15);
@@ -15725,6 +16006,7 @@
 
       let orchardCount = 0;
       for (let t = 0.758; t < 0.852; t += 0.01) {
+        if (window.__TEMPLES && window.__TEMPLES.some(tp => Math.abs(t - tp.t) < 0.016)) continue;
         for (const sd of [-1, 1]) {
           for (let tier = 0; tier < 2; tier++) {
             const off = sd * (11.8 + tier * 9.8),
@@ -17443,6 +17725,7 @@
 
       // ================= สวนมะพร้าวสิ้นสุดก่อนเริ่มเส้นทางภูเขาใหม่ =================
       for (let t = 0.858; t < T_ROUTE_EXT_START; t += 0.009) {
+        if (window.__TEMPLES && window.__TEMPLES.some(tp => Math.abs(t - tp.t) < 0.016)) continue;
         for (const sd of [-1, 1]) {
           const off = sd * 11.2,
             o = offRoad(t, off);
@@ -17542,19 +17825,150 @@
             }
         };
 
-        // 0. รอบๆ วัดทั้ง 5 แห่ง: มีพระสงฆ์เดินจงกรม/เดินบิณฑบาตหน้าวัด และสนทนาธรรมกับญาติโยมหน้าซุ้มประตูวัด
+        // 0. รอบๆ วัดทั้ง 5 แห่ง: พระสงฆ์ + งานทำบุญหน้าวัด (พระนั่งรับสังฆทาน ญาติโยมพับเพียบพนมมือ พ่อค้าแม่ค้า ลูกค้า และคนเดินเที่ยวงานด้วยโมเดลคนสมจริง)
         if (window.__TEMPLES) {
+          const meritLady = (topCol, btCol, hs = 1, p = '') => ({
+            sk: pk(SK),
+            top: topCol || pk([0xfaf6ee, 0xf5e6d3, 0xe8d5dc, 0xd8eadf, 0xf2dca6]),
+            bt: btCol || pk([0x6b3a4a, 0x2f4a6b, 0x2f6b5a, 0x5c3d2e]),
+            skirt: 1,
+            short: 1,
+            hair: pk(HC),
+            hs,
+            long: 1,
+            p,
+            v: 0.36,
+            k: 6
+          });
+          const meritMan = (topCol, old = 0, p = '') => ({
+            sk: pk(SK),
+            top: topCol || pk([0xf6f3ea, 0xe6dec8, 0xd4e2ea, 0x8fb177]),
+            bt: pk([0x3b4a5c, 0x4a4238, 0x2f3d38]),
+            hair: old ? 0xd2cdc4 : pk(HC),
+            old,
+            hs: 0,
+            long: 1,
+            p,
+            v: 0.36,
+            k: old ? 4 : 0
+          });
           window.__TEMPLES.forEach(tp => {
+            const cosR = Math.cos(tp.rot),
+              sinR = Math.sin(tp.rot),
+              toFair = (lx, lz) => ({
+                x: tp.x + lx * cosR + lz * sinR,
+                z: tp.z - lx * sinR + lz * cosR
+              });
+            const placeFairPerson = (outfit, mode, lx, lz, lrot, yBase = 0) => {
+              const w = toFair(lx, lz),
+                p = addP(outfit, mode, w.x, w.z, tp.t, tp.sd * 9);
+              p.x = w.x;
+              p.z = w.z;
+              p.yBase = yBase;
+              p.yaw = tp.rot + lrot;
+              p.nt = 1; // กลางคืนหายไปทั้งหมด
+              p.g.position.set(w.x, yBase, w.z);
+              p.g.rotation.y = p.yaw;
+              return p;
+            };
+            const addFairWalker = (outfit, lx1, lz1, lx2, lz2, u0) => {
+              const a = toFair(lx1, lz1),
+                b = toFair(lx2, lz2),
+                p = addP(outfit, 'fair_walk', a.x, a.z, tp.t, tp.sd * 9);
+              p.ax = a.x;
+              p.az = a.z;
+              p.bx = b.x;
+              p.bz = b.z;
+              p.segLen = Math.max(0.5, Math.hypot(b.x - a.x, b.z - a.z));
+              p.u = u0;
+              p.dir = u0 > 0.5 ? -1 : 1;
+              p.baseYaw = Math.atan2(b.x - a.x, b.z - a.z);
+              p.turn = p.dir > 0 ? 0 : Math.PI;
+              p.x = a.x + (b.x - a.x) * u0;
+              p.z = a.z + (b.z - a.z) * u0;
+              p.yaw = p.baseYaw + p.turn;
+              p.nt = 1;
+              p.g.position.set(p.x, 0, p.z);
+              p.g.rotation.y = p.yaw;
+              return p;
+            };
+
             const m1 = addP(monkOutfit(true), 'walk', 0, 0, tp.t - 0.004, tp.sd * 4.5);
             m1.span = 9.0;
+            m1.nt = 1;
             // พระยืนสนทนาธรรม/ให้พรญาติโยมบริเวณหน้าทางเข้าวัด
-            const gateDist = 14.5;
-            const gx = tp.x + Math.sin(tp.rot) * gateDist;
-            const gz = tp.z + Math.cos(tp.rot) * gateDist;
-            const monkTalk = placeTalker(monkOutfit(true), gx - Math.cos(tp.rot) * 0.55, gz + Math.sin(tp.rot) * 0.55, tp.rot - 1.2, tp.t, tp.sd * 7.5);
-            const layPerson = placeTalker(elder('sac'), gx + Math.cos(tp.rot) * 0.55, gz - Math.sin(tp.rot) * 0.55, tp.rot + 1.9, tp.t, tp.sd * 7.5);
+            const gateDist = 14.5,
+              gx = tp.x + sinR * gateDist,
+              gz = tp.z + cosR * gateDist;
+            const monkTalk = placeTalker(monkOutfit(true), gx - cosR * 0.55, gz + sinR * 0.55, tp.rot - 1.2, tp.t, tp.sd * 7.5);
+            const layPerson = placeTalker(elder('sac'), gx + cosR * 0.55, gz - sinR * 0.55, tp.rot + 1.9, tp.t, tp.sd * 7.5);
+            monkTalk.nt = 1;
+            layPerson.nt = 1;
             monkTalk.partner = layPerson;
             layPerson.partner = monkTalk;
+
+            // (ก) ปะรำพิธีทำบุญ: พระสงฆ์ 5 รูปนั่งขัดสมาธิบนอาสนะ เจริญพระพุทธมนต์/รับสังฆทาน
+            const PVX = -12.2,
+              PVZ = 21.5;
+            [-2.2, -1.1, 0, 1.1, 2.2].forEach((mz, idx) => {
+              const mk = placeFairPerson(monkOutfit(false), 'sit_monk', PVX - 0.9, PVZ + mz, Math.PI / 2, 0.24);
+              mk.ph = idx * 1.1;
+            });
+
+            // (ข) ญาติโยม/ชาวบ้านนั่งพับเพียบพนมมือไหว้พระทำบุญ 2 แถวบนพรมแดง
+            [-2.2, -1.1, 0, 1.1, 2.2].forEach((mz, idx) => {
+              const out1 = idx % 2 === 0 ? meritLady(0, 0, (idx % 2) + 1) : meritMan(0, idx === 1 ? 1 : 0);
+              const p1 = placeFairPerson(out1, 'sit_wai', PVX + 0.58, PVZ + mz + 0.22, -Math.PI / 2, 0.18);
+              p1.ph = idx * 0.9;
+              if (idx < 4) {
+                const out2 = idx === 2 ? stu() : idx % 2 === 0 ? meritMan(0, 1) : meritLady(0, 0, 2);
+                const p2 = placeFairPerson(out2, 'sit_wai', PVX + 1.52, PVZ + mz + 0.65, -Math.PI / 2, 0.18);
+                p2.ph = idx * 1.3 + 0.5;
+              }
+            });
+
+            // (ค) พ่อค้าแม่ค้าและลูกค้าตามซุ้มร้านค้างานวัด 4 ร้าน
+            [
+              [-4.4, 20.2, 1],
+              [4.4, 20.2, -1],
+              [-4.4, 23.0, 1],
+              [4.4, 23.0, -1]
+            ].forEach(([sx, sz, dir], idx) => {
+              const sellerRot = dir > 0 ? Math.PI / 2 : -Math.PI / 2,
+                buyerRot = -sellerRot;
+              const sellerOutfit =
+                idx % 2 === 0
+                  ? { sk: pk(SK), top: pk([0xe98f7d, 0xf2c14e]), bt: 0x3d4a5c, skirt: 1, short: 1, hair: pk(HC), hs: 1, hat: 'towel', v: 0.2, k: 8 }
+                  : { sk: pk(SK), top: pk([0x6e9fb0, 0x8fb177]), bt: 0x2f3d38, short: 1, hair: pk(HC), hs: 0, hat: 'straw', v: 0.2, k: 8 };
+              const vnd = placeFairPerson(sellerOutfit, 'talk', sx - dir * 0.15, sz, sellerRot, 0);
+              const buy1 = placeFairPerson(
+                idx % 2 === 0 ? meritLady(0, 0, 2, 'sac') : meritMan(0, 0, 'bag'),
+                'talk',
+                sx + dir * 1.22,
+                sz + 0.26,
+                buyerRot - 0.15,
+                0
+              );
+              vnd.partner = buy1;
+              buy1.partner = vnd;
+              if (idx < 3) {
+                placeFairPerson(idx === 1 ? stu() : elder('umb'), 'talk', sx + dir * 1.32, sz - 0.38, buyerRot + 0.22, 0);
+              }
+            });
+
+            // (ง) ชาวบ้านร่วมทำบุญต้นผ้าป่า & ครอบครัวชมชิงช้าสวรรค์
+            placeFairPerson(meritLady(0xfaf6ee, 0x6b3a4a, 1, 'sac'), 'talk', -6.6, 23.4, -Math.PI / 2, 0);
+            placeFairPerson(elder('cane'), 'talk', -7.4, 24.35, Math.PI, 0);
+            placeFairPerson({ sk: pk(SK), top: 0xe98f7d, bt: 0xc9b48a, short: 1, hair: pk(HC), hs: 1, hat: 'wide', p: 'cam', v: 0.3, k: 0 }, 'talk', 10.2, 21.2, Math.PI / 2, 0);
+            placeFairPerson(stu(), 'talk', 10.3, 22.0, Math.PI / 2 - 0.2, 0);
+
+            // (จ) ผู้คนเดินเที่ยวงานวัดไป-มาบนทางเดินและลานหน้าวัด (มีแอนิเมชันก้าวขาแกว่งแขนสมจริง)
+            addFairWalker(meritLady(0, 0, 1, 'sac'), -0.85, 17.8, -0.85, 24.6, 0.2);
+            addFairWalker(meritMan(0, 0), 0.85, 24.6, 0.85, 17.8, 0.7);
+            addFairWalker(stu(), -0.25, 18.4, -0.25, 24.2, 0.55);
+            addFairWalker(elder('cane'), 0.35, 24.0, 0.35, 18.6, 0.35);
+            addFairWalker(meritLady(0, 0, 2, 'umb'), -8.2, 24.6, 8.2, 24.6, 0.3);
+            addFairWalker(meritMan(0, 0, 'bag'), 8.2, 24.9, -8.2, 24.9, 0.75);
           });
         }
 
@@ -18416,7 +18830,7 @@
       
       for (const h of crowd)
         if (h.mode !== 'walk') {
-          h.g.position.set(h.x, h.mode === 'work' ? 0.04 : h.mode === 'fish' ? 0.08 : 0, h.z);
+          h.g.position.set(h.x, h.yBase !== undefined ? h.yBase : h.mode === 'work' ? 0.04 : h.mode === 'fish' ? 0.08 : 0, h.z);
           h.g.rotation.y = h.yaw;
         }
 
@@ -18534,7 +18948,8 @@
         const curT = state.routeT,
           inWindingZone = curT <= 0.56 || curT >= 0.92;
         for (const h of crowd) {
-          const wk = h.mode === 'walk';
+          const wk = h.mode === 'walk',
+            fwk = h.mode === 'fair_walk';
           // ในช่วงจันจว้า-เวียงแก่น (ถนนคดเคี้ยวซ้อนกันในพื้นที่แคบ) ซ่อนคนที่อยู่คนละช่วงโค้งถนนทันทีเพื่อประหยัด CPU/GPU
           if (inWindingZone && h.t0 > 0 && (h.t0 <= 0.56 || h.t0 >= 0.92)) {
             let dtR = Math.abs((wk ? h.t : h.t0) - curT);
@@ -18569,6 +18984,21 @@
             const tgtTurn = h.dir > 0 ? 0 : Math.PI;
             h.turn += (tgtTurn - h.turn) * Math.min(1, dt * (h.run ? 10 : 6));
             h.g.rotation.y = Math.atan2(tn.x, tn.z) + h.turn;
+          } else if (fwk) {
+            const walkSp = baseWalkSp * (h.v / 0.45);
+            h.u += h.dir * (walkSp / h.segLen) * dt;
+            if (h.u >= 1) {
+              h.u = 1;
+              h.dir = -1;
+            } else if (h.u <= 0) {
+              h.u = 0;
+              h.dir = 1;
+            }
+            h.g.position.x = h.ax + (h.bx - h.ax) * h.u;
+            h.g.position.z = h.az + (h.bz - h.az) * h.u;
+            const tgtTurn = h.dir > 0 ? 0 : Math.PI;
+            h.turn += (tgtTurn - h.turn) * Math.min(1, dt * 6);
+            h.g.rotation.y = h.baseYaw + h.turn;
           }
           const dx = h.g.position.x - cX,
             dz = h.g.position.z - cZ,
@@ -18576,10 +19006,10 @@
             dot = dx * fX + dz * fZ;
           const lim = dot > -22 ? (h.g.visible ? 3844 : 3481) : 1225, // ด้านหน้า 59-62m, ด้านหลัง 35m
             far = d2 > lim,
-            hid = nF > 0.5 && h.nt > 0.15;
+            hid = (state.night || nF > 0.5) && h.nt > 0.15;
           h.g.visible = !far && !hid;
           if (!h.g.visible) continue;
-          if ((wk || h.mode === 'talk') && !h.at && totalTime > h.cool && d2 < (wk ? 70 : 100)) {
+          if ((wk || fwk || h.mode === 'talk') && !h.at && totalTime > h.cool && d2 < (wk || fwk ? 70 : 100)) {
             h.cool = totalTime + 28;
             h.at = totalTime + h.dly;
           }
@@ -18593,7 +19023,7 @@
           const s = Math.sin(h.ph),
             c = Math.cos(h.ph),
             am = h.run ? 0.64 : h.skirt ? 0.24 : 0.32;
-          if (wk) {
+          if (wk || fwk) {
             h.legs[0].h.rotation.x = -s * am + (h.run ? -0.08 : 0);
             h.legs[1].h.rotation.x = s * am + (h.run ? -0.08 : 0);
             h.legs[0].k.rotation.x = (h.run ? (0.55 + 0.45 * Math.max(0, c)) * 1.15 : Math.max(0, c) * (h.skirt ? 0.5 : 0.75)) * am * 1.2;
@@ -18610,6 +19040,36 @@
             h.hd.rotation.y =
               d2 < 85 ? cl(Math.sin(Math.atan2(-dx, -dz) - h.g.rotation.y), -0.45, 0.45) : -s * 0.04;
             h.hd.rotation.x = Math.cos(h.ph * 2) * (h.run ? 0.032 : 0.018);
+          } else if (h.mode === 'sit_monk') {
+            // ท่าพระสงฆ์นั่งขัดสมาธิบนอาสนะ พนมมือเจริญพระพุทธมนต์/ให้พร
+            const motion = state.reduced ? 0 : 1,
+              chant = Math.sin(tt * 1.35 + h.ph) * motion;
+            h.pel.position.y = 0.24;
+            h.legs[0].h.rotation.set(-1.42, 0.45, 0.55);
+            h.legs[1].h.rotation.set(-1.42, -0.45, -0.55);
+            h.legs[0].k.rotation.x = 2.15;
+            h.legs[1].k.rotation.x = 2.15;
+            h.tor.rotation.set(0.04 + chant * 0.025, Math.sin(tt * 0.55 + h.ph) * 0.035 * motion, 0);
+            h.hd.rotation.set(0.06 + chant * 0.035, Math.sin(tt * 0.7 + h.ph) * 0.055 * motion, 0);
+            h.arms[0].sh.rotation.set(-0.62, 0.25, -0.28);
+            h.arms[0].el.rotation.set(-1.15, 0, -0.25);
+            h.arms[1].sh.rotation.set(-0.62, -0.25, 0.28);
+            h.arms[1].el.rotation.set(-1.15, 0, 0.25);
+          } else if (h.mode === 'sit_wai') {
+            // ท่าญาติโยมนั่งพับเพียบพนมมือไหว้พระและก้มกราบรับพรเป็นจังหวะนุ่มนวล
+            const motion = state.reduced ? 0 : 1,
+              bow = Math.max(0, Math.sin(tt * 0.85 + h.ph)) * 0.16 * motion;
+            h.pel.position.y = 0.23;
+            h.legs[0].h.rotation.set(-1.45, 0.35, 0.42);
+            h.legs[0].k.rotation.x = 2.25;
+            h.legs[1].h.rotation.set(-1.45, 0.25, 0.12);
+            h.legs[1].k.rotation.x = 2.25;
+            h.tor.rotation.set(0.1 + bow, Math.sin(tt * 0.6 + h.ph) * 0.03 * motion, 0);
+            h.hd.rotation.set(0.12 + bow * 0.8, Math.sin(tt * 0.75 + h.ph) * 0.04 * motion, 0);
+            h.arms[0].sh.rotation.set(-0.72 - bow * 0.2, 0.28, -0.32);
+            h.arms[0].el.rotation.set(-1.28, 0, -0.28);
+            h.arms[1].sh.rotation.set(-0.72 - bow * 0.2, -0.28, 0.32);
+            h.arms[1].el.rotation.set(-1.28, 0, 0.28);
           } else if (h.mode === 'castnet') {
             // ท่าคนทอดแหและสาวแหขึ้นจากแม่น้ำเป็นจังหวะสมูท
             const cyc = (tt * 0.55 + h.ph) % (Math.PI * 2),

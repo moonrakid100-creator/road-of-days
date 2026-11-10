@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="th">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -232,15 +232,53 @@
   <button type="button" class="secondary" id="storyRead" hidden>อ่านความทรงจำ</button>
 </div>
 
-<script src="Road_of_Days_Models.js?v=8.0"></script>
-<script src="Road_of_Days_Chiangrai_v4.js?v=8.0"></script>
-<script src="Road_of_Days_UX.js?v=8.0"></script>
 <script>
-if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
-  });
-}
+(function() {
+  var isCap = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  var GH_BASE = 'https://moonrakid100-creator.github.io/road-of-days/';
+  var VER = 'v=8.5';
+  var files = ['Road_of_Days_Models.js', 'Road_of_Days_Chiangrai_v4.js', 'Road_of_Days_UX.js'];
+
+  if (isCap) {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(rs) {
+        rs.forEach(function(r) { r.unregister(); });
+      }).catch(function() {});
+    }
+    var css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = GH_BASE + 'Road_of_Days_Chiangrai_v4.css?_=' + Date.now();
+    document.head.appendChild(css);
+  } else if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    window.addEventListener('load', function() {
+      navigator.serviceWorker.register('./sw.js').catch(function() {});
+    });
+  }
+
+  function loadSeq(idx, useLocal) {
+    if (idx >= files.length) return;
+    var s = document.createElement('script');
+    var f = files[idx];
+    s.src = (!isCap || useLocal) ? (f + '?' + VER) : (GH_BASE + f + '?_=' + Date.now());
+    var done = false;
+    s.onload = function() {
+      if (done) return;
+      done = true;
+      loadSeq(idx + 1, useLocal);
+    };
+    s.onerror = function() {
+      if (done) return;
+      done = true;
+      if (isCap && !useLocal) {
+        loadSeq(idx, true); // หากไม่มีเน็ตหรือดึงจาก GitHub ไม่ได้ ให้สลับมาใช้ไฟล์ในเครื่อง APK ทันที
+      } else {
+        loadSeq(idx + 1, useLocal);
+      }
+    };
+    document.body.appendChild(s);
+  }
+  loadSeq(0, false);
+})();
 </script>
 
 </body>

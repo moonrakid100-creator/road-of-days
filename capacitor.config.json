@@ -4,7 +4,6 @@
   "webDir": "www",
   "bundledWebRuntime": false,
   "server": {
-    "url": "https://moonrakid100-creator.github.io/road-of-days/",
-    "cleartext": true
+    "androidScheme": "https"
   }
 }
