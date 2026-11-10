@@ -250,16 +250,16 @@ body { height: 100dvh; overflow: hidden; }
 }
 .rmap.off { display: none !important; }
 .rmap-box {
-  background: #f6f4ed;
-  border: 2px solid #ffffff;
-  border-radius: 24px;
+  background: linear-gradient(145deg, #f8f8f1, #edf2e8);
+  border: 1px solid #ffffff;
+  border-radius: 26px;
   padding: 18px;
-  width: min(94vw, 860px);
-  max-height: 90dvh;
+  width: min(96vw, 1180px);
+  max-height: 94dvh;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+  gap: 10px;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.48);
   color: #304a3e;
 }
 .rmap-head {
@@ -271,14 +271,25 @@ body { height: 100dvh; overflow: hidden; }
 }
 .rmap-head h3 {
   margin: 0;
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 700;
   color: #304a3e;
 }
 .rmap-head p {
-  margin: 2px 0 0;
+  margin: 5px 0 0;
   font-size: 12px;
-  color: #64786a;
+  font-weight: 600;
+  color: #526a58;
+}
+.rmap-current {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid #d5e2ce;
+  border-radius: 999px;
+  background: #ffffffc9;
+  font-variant-numeric: tabular-nums;
 }
 .rmap-actions {
   display: flex;
@@ -287,6 +298,24 @@ body { height: 100dvh; overflow: hidden; }
   gap: 10px;
   flex-wrap: wrap;
 }
+.rmap-view-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 13px;
+  border: 1px solid #c8d9c5;
+  border-radius: 12px;
+  background: #fff;
+  color: #315940;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.rmap-view-btn:hover { background: #e8f1e4; }
+.rmap-view-btn svg { width: 15px; height: 15px; }
 .rmap-zoom {
   display: flex;
   align-items: center;
@@ -323,11 +352,11 @@ body { height: 100dvh; overflow: hidden; }
   font-variant-numeric: tabular-nums;
 }
 .rmap-close {
-  background: #376951;
+  background: #315f43;
   color: #fff;
   border: 0;
   border-radius: 12px;
-  padding: 8px 16px;
+  padding: 10px 16px;
   font-weight: 600;
   font-size: 13px;
   cursor: pointer;
@@ -337,27 +366,43 @@ body { height: 100dvh; overflow: hidden; }
   display: block;
   width: 100% !important;
   height: auto !important;
-  max-height: calc(90dvh - 130px);
+  max-height: calc(94dvh - 205px);
   aspect-ratio: 4 / 3;
-  border-radius: 16px;
+  border-radius: 18px;
   cursor: grab;
   background: #e8f0df;
   border: 1px solid #d5dfce;
+  box-shadow: inset 0 1px 5px #254e3a12, 0 4px 16px #254e3a0d;
   touch-action: none;
 }
+.rmap-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: -2px 0 0;
+  color: #708174;
+  font-size: 11px;
+}
+.rmap-hint svg { width: 13px; height: 13px; }
 .rmap-legend {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 14px;
-  font-size: 11.5px;
+  gap: 7px;
+  font-size: 11px;
   color: #4a5d52;
-  padding-top: 2px;
+  padding-top: 1px;
 }
 .rmap-legend span {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-height: 27px;
+  padding: 0 9px;
+  border: 1px solid #dce5d8;
+  border-radius: 999px;
+  background: #ffffffb8;
 }
 
 .talk { position: absolute; left: 0; top: 0; z-index: 3; pointer-events: none; opacity: 0; transition: opacity .25s; background: #fff; color: #304a3e; border-radius: 14px; padding: 5px 10px; font-size: 11px; line-height: 1.4; max-width: 150px; text-align: center; box-shadow: 0 3px 12px #2f4a3e30; will-change: transform; }
@@ -478,10 +523,20 @@ body { height: 100dvh; overflow: hidden; }
   
   .story-pop { left: 15px !important; top: 96px !important; }
   .rmap { padding: 10px; }
-  .rmap-box { width: 96vw; padding: 12px; border-radius: 20px; }
-  .rmap-head { align-items: flex-start; }
-  .rmap-actions { justify-content: space-between; }
-  .rmap-close { padding: 8px 11px; }
+  .rmap-box { width: 96vw; max-height: 96dvh; padding: 12px; border-radius: 20px; gap: 8px; }
+  .rmap-head { align-items: flex-start; flex-direction: column; }
+  .rmap-head h3 { font-size: 17px; }
+  .rmap-head p { font-size: 11px; }
+  .rmap-actions { width: 100%; justify-content: space-between; gap: 6px; }
+  .rmap-view-btn { min-height: 36px; padding: 0 9px; font-size: 11px; }
+  .rmap-zoom { gap: 3px; padding: 3px; }
+  .rmap-zoom-btn, .rmap-zoom-reset { min-width: 29px; height: 29px; }
+  .rmap-zoom-reset { padding: 0 6px; font-size: 10px; }
+  .rmap-close { padding: 8px 10px; font-size: 11px; }
+  .rmap canvas { max-height: calc(96dvh - 245px); }
+  .rmap-legend { justify-content: flex-start; gap: 5px; font-size: 10px; }
+  .rmap-legend span { min-height: 25px; padding: 0 7px; }
+  .rmap-hint { font-size: 10px; }
   .toast { bottom: auto; top: calc(var(--hudh, 56px) + 14px) !important; transform: translate(-50%, -12px); white-space: nowrap; }
   .toast.show { transform: translate(-50%, 0); }
   
@@ -1097,6 +1152,25 @@ body.zen .top, body.zen .intro, body.zen .quote, body.zen footer, body.zen .mobi
   flex-shrink: 0;
   border: 1.5px solid rgba(0, 0, 0, 0.18);
 }
+.rmap-legend .lg-line {
+  width: 18px;
+  height: 4px;
+  border-radius: 999px;
+  display: inline-block;
+  flex-shrink: 0;
+  background: var(--map-color);
+}
+.rmap-legend .lg-village {
+  height: 0;
+  border-top: 3px dashed #587746;
+  background: transparent;
+}
+.rmap-view-btn:focus-visible,
+.rmap-zoom button:focus-visible,
+.rmap-close:focus-visible {
+  outline: 3px solid #e6a848;
+  outline-offset: 2px;
+}
 #placeLabel {
   display: inline-flex;
   align-items: center;
@@ -1206,4 +1280,34 @@ body.zen .top, body.zen .intro, body.zen .quote, body.zen footer, body.zen .mobi
     width: 11px;
     height: 11px;
   }
+}
+
+body:has(.rmap:not(.off)) .fab,
+body:has(.rmap:not(.off)) .speed-btn {
+  display: none !important;
+}
+
+@media (max-height: 500px) {
+  .rmap { padding: 8px; }
+  .rmap-box {
+    max-height: calc(100dvh - 16px);
+    padding: 10px;
+    gap: 6px;
+    border-radius: 20px;
+    overflow-y: auto;
+  }
+  .rmap-head { align-items: center; gap: 8px; }
+  .rmap-actions { flex-wrap: nowrap; gap: 6px; }
+  .rmap-view-btn { min-height: 34px; padding: 0 9px; font-size: 11px; }
+  .rmap-zoom { gap: 3px; padding: 3px; }
+  .rmap-zoom-btn, .rmap-zoom-reset { min-width: 28px; height: 28px; }
+  .rmap-zoom-reset { padding: 0 6px; font-size: 10px; }
+  .rmap-close { padding: 8px 10px; font-size: 11px; }
+  .rmap canvas {
+    max-height: calc(100dvh - 225px);
+    border-radius: 12px;
+  }
+  .rmap-hint { font-size: 10px; }
+  .rmap-legend { gap: 4px; font-size: 10px; }
+  .rmap-legend span { min-height: 24px; padding: 0 7px; }
 }

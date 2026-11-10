@@ -6,7 +6,7 @@
 <link rel="manifest" href="manifest.json"><link rel="icon" type="image/png" href="icon-192.png"><link rel="apple-touch-icon" href="icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
-<link rel="stylesheet" href="Road_of_Days_Chiangrai_v4.css?v=7.6">
+<link rel="stylesheet" href="Road_of_Days_Chiangrai_v4.css?v=7.8">
 </head>
 <body>
 <svg style="display:none" aria-hidden="true"><defs>
@@ -132,7 +132,7 @@
 <nav class="mobile-nav" aria-label="เมนูมือถือ"><button data-view="home" class="active"><svg><use href="#i-road"/></svg>เส้นทาง</button><button data-view="journal"><svg><use href="#i-book"/></svg>บันทึก</button><button data-view="rest"><svg><use href="#i-leaf"/></svg>พักใจ</button><button id="mobileSettings"><svg><use href="#i-gear"/></svg>ตั้งค่า</button></nav>
 <div class="overlay" id="lanternModal" hidden><section class="modal" role="dialog" aria-modal="true" aria-labelledby="lanternHeading"><div class="modal-head"><h2 id="lanternHeading">ฝากความหนักใจไว้กับโคม</h2><button class="iconbtn" data-close="lanternModal" aria-label="ปิด" type="button"><svg><use href="#i-close"/></svg></button></div><p>เขียนเรื่องที่อยากวางลง แล้วมองมันค่อย ๆ ลอยไกลออกไป ข้อความนี้จะไม่ถูกเก็บไว้ในสมุดบันทึกหรือส่งขึ้นเซิร์ฟเวอร์</p><label class="sr-only" for="lanternMessage">ข้อความที่อยากวางลง</label><textarea id="lanternMessage" class="field" rows="4" maxlength="500" placeholder="วันนี้ฉันขอวาง…"></textarea><p class="tiny">เป็นการจำลองโคมลอยในโลก 3D เท่านั้น ไม่มีการปล่อยโคมจริง</p><button class="primary" id="releaseLantern">ปล่อยให้ลอยไป</button></section></div>
 <div class="overlay" id="settingsModal" hidden><section class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsHeading"><div class="modal-head"><h2 id="settingsHeading">พื้นที่ในแบบของคุณ</h2><button class="iconbtn" data-close="settingsModal" aria-label="ปิด" type="button"><svg><use href="#i-close"/></svg></button></div>
-<p>บันทึกและตำแหน่งรถเก็บใน localStorage ของเบราว์เซอร์นี้ ไม่เข้ารหัส สำรองข้อมูลก่อนล้างข้อมูลเบราว์เซอร์</p>
+<p>บันทึกเก็บในเครื่องและซิงก์ขึ้นคลาวด์เมื่อออนไลน์ การดูข้อมูลข้ามอุปกรณ์ต้องใช้รหัสบัญชีเดียวกัน ข้อมูลในเครื่องไม่เข้ารหัส โปรดสำรองก่อนล้างข้อมูลเบราว์เซอร์</p>
 
 <!-- หมวด: การแสดงผล (JS แทรกแถว "ระดับกราฟิก" และ "RAM" ในหมวดนี้) -->
 <section class="set-sec" aria-labelledby="setH1"><h3 class="set-h" id="setH1">การแสดงผล</h3><div class="set-box">
@@ -236,7 +236,7 @@
 (function() {
   var isCap = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   var GH_BASE = 'https://moonrakid100-creator.github.io/road-of-days/';
-  var VER = 'v=8.5';
+  var VER = 'v=10.5';
   var files = ['Road_of_Days_Models.js', 'Road_of_Days_Chiangrai_v4.js', 'Road_of_Days_UX.js'];
 
   if (isCap) {

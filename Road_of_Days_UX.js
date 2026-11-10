@@ -82,7 +82,7 @@
     }
   });
   const hint = form.querySelector('.form-bottom span');
-  if (hint) hint.textContent = 'เก็บไว้ในเบราว์เซอร์นี้เท่านั้น · กด Ctrl+Enter เพื่อบันทึกเร็ว ๆ';
+  if (hint) hint.textContent = 'เก็บในเครื่องและซิงก์คลาวด์เมื่อออนไลน์ · ใช้รหัสบัญชีเดียวกันทุกอุปกรณ์ · Ctrl+Enter เพื่อบันทึก';
 
   /* 5) ฉบับร่างอัตโนมัติ: พิมพ์ค้างไว้แล้วปิดหน้าก็ไม่หาย */
   let draftTimer = 0;

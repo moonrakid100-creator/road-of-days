@@ -10,6 +10,7 @@
 
   const $ = id => document.getElementById(id),
     KEY = 'road-of-days-3d-v4';
+  const CLOUD_PENDING_KEY = 'road-of-days-cloud-pending:';
   const moods = [
     {
       id: 'happy',
@@ -156,8 +157,7 @@
   }
   window.triggerManualSync = async () => {
     if (syncStatusState.mode === 'syncing') return;
-    if (!isCloudSynced) await loadOnline();
-    else await saveOnline(true);
+    await loadOnline();
   };
 
   // 1. ตรวจสอบรหัสบัญชี (ไม่ใช้ prompt เพื่อให้รองรับมือถือ 100%)
@@ -184,8 +184,7 @@
     if (input) input.value = name;
     renderSyncStatus();
     isReloading = false;
-    await loadOnline();
-    return true;
+    return loadOnline();
   }
 
   // หน้าต้อนรับ: ถามชื่อเล่นตอนเปิดแอปครั้งแรก (แทน prompt() ที่มือถือไม่แสดง)
@@ -211,9 +210,13 @@
       if (!v) { msg.textContent = 'กรุณาพิมพ์ชื่อเล่นก่อนครับ'; return; }
       btn.disabled = true;
       msg.textContent = '⏳ กำลังดึงข้อมูลของ "' + v.replace(/[<>&]/g, '') + '" จากคลาวด์...';
-      await applyNickname(v);
+      const synced = await applyNickname(v);
       ov.remove();
-      if (typeof toast === 'function') toast('✔️ เชื่อมต่อบัญชี "' + v.replace(/[<>&]/g, '') + '" เรียบร้อย');
+      if (typeof toast === 'function') {
+        toast(synced
+          ? '✔️ เชื่อมต่อบัญชี "' + v.replace(/[<>&]/g, '') + '" เรียบร้อย'
+          : 'ตั้งบัญชีแล้ว แต่ซิงก์คลาวด์ไม่สำเร็จ ข้อมูลยังอยู่ในเครื่องนี้');
+      }
     };
     btn.onclick = submit;
     inp.onkeydown = e => { if (e.key === 'Enter') submit(); };
@@ -234,7 +237,7 @@
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <div>
             <strong style="color:#2d6b4f; font-size:15px;">☁️ บัญชีซิงก์ข้อมูล (คลาวด์)</strong>
-            <div class="tiny">ใส่ชื่อเดียวกันทุกเครื่อง เพื่อให้ข้อมูลตรงกัน</div>
+            <div class="tiny">ใช้รหัสบัญชีเดียวกันทุกเครื่อง (ตัวพิมพ์เล็ก/ใหญ่ต้องตรงกัน)</div>
           </div>
           <span style="font-size:12px; font-weight:600; background:#2d6b4f; color:#fff; padding:3px 10px; border-radius:10px;" id="currentNickBadge">${currentName}</span>
         </div>
@@ -242,7 +245,7 @@
           <input type="text" id="nickInput" class="field" value="${currentName}" placeholder="พิมพ์ชื่อเล่นของคุณ (เช่น beer)" style="flex:1; padding:8px 12px; font-size:14px;">
           <button type="button" class="primary" id="applySyncBtn" style="white-space:nowrap; padding:8px 16px;">ซิงก์ข้อมูล</button>
         </div>
-        <div class="tiny" id="syncNotice" style="color:#666;">แตะ "ซิงก์ข้อมูล" เพื่อดึงบันทึกและพิกัดรถจากคลาวด์</div>
+        <div class="tiny" id="syncNotice" style="color:#666;">ซิงก์แล้วจะเห็นบันทึกและตำแหน่งรถจากอุปกรณ์อื่นที่ใช้รหัสเดียวกัน</div>
       `;
       exportRow.parentNode.insertBefore(box, exportRow);
 
@@ -253,12 +256,19 @@
           if (typeof toast === 'function') toast('กรุณาพิมพ์ชื่อเล่นของคุณ');
           return;
         }
-        notice.textContent = '⏳ กำลังดึงข้อมูลของ "' + inputVal.replace(/[<>&]/g, '') + '" จากคลาวด์...';
+        notice.textContent = '⏳ กำลังเชื่อมต่อบัญชี "' + inputVal.replace(/[<>&]/g, '') + '"...';
         notice.style.color = '#2d6b4f';
         
-        await applyNickname(inputVal);
-        notice.textContent = '✔️ ซิงก์ข้อมูลสำเร็จแล้ว!';
-        if (typeof toast === 'function') toast('✔️ เชื่อมต่อบัญชี "' + inputVal.replace(/[<>&]/g, '') + '" เรียบร้อย');
+        const synced = await applyNickname(inputVal);
+        notice.textContent = synced
+          ? '✔️ เชื่อมต่อและซิงก์ข้อมูลสำเร็จแล้ว'
+          : 'ซิงก์ไม่สำเร็จ ข้อมูลยังอยู่ในเครื่องนี้ ตรวจอินเทอร์เน็ตหรือรหัสบัญชีแล้วลองใหม่';
+        notice.style.color = synced ? '#2d6b4f' : '#9a542d';
+        if (typeof toast === 'function') {
+          toast(synced
+            ? '✔️ เชื่อมต่อบัญชี "' + inputVal.replace(/[<>&]/g, '') + '" เรียบร้อย'
+            : 'เชื่อมต่อคลาวด์ไม่สำเร็จ ข้อมูลยังไม่ซิงก์');
+        }
       };
     }
   }, 1000);
@@ -342,7 +352,9 @@
       night: false,
       routeT: 0.0112,
       reduced: matchMedia('(prefers-reduced-motion: reduce)').matches,
-      qualityMode: 'auto'
+      qualityMode: 'auto',
+      visualMode: 'natural',
+      gpuPreference: 'auto'
     },
     editing = null,
     currentView = 'home',
@@ -364,7 +376,9 @@
       night: !!s.night,
       routeT: Math.min(0.98, Math.max(0.01, +s.routeT || 0.0112)),
       reduced: !!s.reduced,
-      qualityMode: ['auto','0','1','2','3','4'].includes(s.qualityMode) ? s.qualityMode : (s.lowQuality ? '0' : 'auto')
+      qualityMode: ['auto','0','1','2','3','4'].includes(s.qualityMode) ? s.qualityMode : (s.lowQuality ? '0' : 'auto'),
+      visualMode: ['natural', 'vivid', 'game'].includes(s.visualMode) ? s.visualMode : 'natural',
+      gpuPreference: ['auto', 'high-performance', 'low-power'].includes(s.gpuPreference) ? s.gpuPreference : 'auto'
     };
   }
 
@@ -373,12 +387,14 @@
     const raw = localStorage.getItem(KEY);
     if (raw) state = validData(JSON.parse(raw));
   } catch (e) { storageOK = false; }
+  let localStateAccountId = myId;
 
   // 2. ฟังก์ชันดึงข้อมูลจาก Cloud
   async function loadOnline() {
+    const accountId = myId;
     setSyncStatus('syncing', 'กำลังดึงข้อมูล…');
     try {
-      const encodedId = encodeURIComponent(myId);
+      const encodedId = encodeURIComponent(accountId);
       const res = await fetch(`${SUPABASE_URL}/rest/v1/road_of_days?id=eq.${encodedId}&select=data`, {
         method: 'GET',
         cache: 'no-store',
@@ -391,12 +407,27 @@
       if (!res.ok) throw new Error('Supabase Fetch Error: ' + res.status);
       
       const rows = await res.json();
+      if (accountId !== myId) return false;
       isCloudSynced = true; // ปลดล็อกอนุญาตให้เซฟขึ้นคลาวด์ได้หลังจากเช็คข้อมูลเสร็จแล้ว
       
       // ถ้าระบบเจอข้อมูลบนคลาวด์ ให้เอามาทับในเครื่องแล้วรีเฟรชทุกส่วนของหน้าจอ
       if (rows && rows.length > 0 && rows[0].data) {
-        state = validData(rows[0].data);
+        const cloudState = validData(rows[0].data);
+        const cloudEntryIds = new Set(cloudState.entries.map(entry => entry.id));
+        const hasPendingChanges = localStateAccountId === accountId &&
+          (localStorage.getItem(CLOUD_PENDING_KEY + accountId) === '1' ||
+            state.entries.some(entry => !cloudEntryIds.has(entry.id)));
+        if (hasPendingChanges) {
+          const entriesById = new Map(cloudState.entries.map(entry => [entry.id, entry]));
+          state.entries.forEach(entry => {
+            if (!entriesById.has(entry.id)) entriesById.set(entry.id, entry);
+          });
+          cloudState.entries = [...entriesById.values()];
+        }
+        state = cloudState;
+        localStateAccountId = accountId;
         localStorage.setItem(KEY, JSON.stringify(state));
+        if (hasPendingChanges && !(await saveOnline())) return false;
         
         if (typeof renderEntries === 'function') renderEntries();
         if (typeof stats === 'function') stats();
@@ -412,26 +443,32 @@
         
         setSyncStatus('synced');
         toast(svgInline('cloud') + ' ซิงก์ข้อมูลจากคลาวด์สำเร็จ! (' + state.entries.length + ' บันทึก)');
+        return true;
       } else {
         // กรณีเป็นชื่อใหม่ที่ยังไม่มีข้อมูลบนคลาวด์ ให้สร้างข้อมูลตั้งต้นขึ้นคลาวด์ทันที
-        await saveOnline();
-        setSyncStatus('synced');
-        toast(svgInline('cloud') + ' สร้างบัญชีใหม่บนคลาวด์เรียบร้อย');
+        localStateAccountId = accountId;
+        const saved = await saveOnline();
+        if (saved) toast(svgInline('cloud') + ' สร้างบัญชีใหม่บนคลาวด์เรียบร้อย');
+        return saved;
       }
     } catch (e) {
+      if (accountId !== myId) return false;
       console.error(e);
+      isCloudSynced = false;
       setSyncStatus('error', 'ออฟไลน์ · เก็บในเครื่อง');
       toast(svgInline('alert') + ' ดึงข้อมูลจาก Supabase ไม่สำเร็จ (ตรวจสอบอินเทอร์เน็ตหรือ RLS Policy)');
+      return false;
     }
   }
 
-  // เรียกโหลดข้อมูลจากคลาวด์เมื่อเปิดแอป
   setTimeout(loadOnline, 600);
 
   // 3. ฟังก์ชันยิงข้อมูลขึ้น Supabase (Upsert)
   async function saveOnline(manual = false) {
-    if (isReloading) return;
-    setSyncStatus('syncing', 'กำลังซิงก์…');
+    if (isReloading) return false;
+    const accountId = myId;
+    const payload = JSON.stringify({ id: accountId, data: state });
+    if (accountId === myId) setSyncStatus('syncing', 'กำลังซิงก์…');
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/road_of_days?on_conflict=id`, {
         method: 'POST',
@@ -442,22 +479,30 @@
           'Content-Type': 'application/json',
           'Prefer': 'resolution=merge-duplicates,return=minimal'
         },
-        body: JSON.stringify({ id: myId, data: state })
+        body: payload
       });
       
       if (!res.ok) {
         const errText = await res.text();
         console.error('Supabase Save Error:', errText);
-        setSyncStatus('error', 'ซิงก์ไม่สำเร็จ');
+        localStorage.setItem(CLOUD_PENDING_KEY + accountId, '1');
+        if (accountId === myId) setSyncStatus('error', 'ซิงก์ไม่สำเร็จ');
         toast(svgInline('alert') + ' เซฟขึ้นคลาวด์ไม่สำเร็จ (' + res.status + ')');
+        return false;
       } else {
-        setSyncStatus('synced');
+        localStateAccountId = accountId;
+        if (accountId === myId) localStateAccountId = accountId;
+        localStorage.removeItem(CLOUD_PENDING_KEY + accountId);
+        if (accountId === myId) setSyncStatus('synced');
         if (manual) toast(svgInline('check') + ' ซิงก์ข้อมูลขึ้นคลาวด์เรียบร้อยแล้ว');
+        return true;
       }
     } catch (e) {
       console.error('Supabase Sync Error:', e);
-      setSyncStatus('error', 'ออฟไลน์ · เก็บในเครื่อง');
+      localStorage.setItem(CLOUD_PENDING_KEY + accountId, '1');
+      if (accountId === myId) setSyncStatus('error', 'ออฟไลน์ · เก็บในเครื่อง');
       toast(svgInline('alert') + ' ไม่สามารถเชื่อมต่อคลาวด์ได้');
+      return false;
     }
   }
 
@@ -468,6 +513,8 @@
       storageOK = true;
       if (syncOnline && !isReloading && (isCloudSynced || forceCloud)) {
         saveOnline();
+      } else if (syncOnline && !isReloading) {
+        localStorage.setItem(CLOUD_PENDING_KEY + myId, '1');
       }
       return true;
     } catch (e) {
@@ -476,15 +523,23 @@
     }
   }
 
-  // บันทึกตำแหน่งรถเมื่อพับหน้าจอหรือสลับแท็บ (เฉพาะหลังจากโหลดข้อมูลคลาวด์แล้ว)
+  // เก็บสำเนาในเครื่องเมื่อออกจากหน้า และดึงข้อมูลใหม่เมื่อกลับมา
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && isCloudSynced && !isReloading) persist(true); 
+    if (document.hidden && !isReloading) {
+      persist(false);
+    } else if (syncStatusState.mode !== 'syncing') {
+      loadOnline();
+    }
   });
   
-  // บันทึกตำแหน่งรถเมื่อปิดหน้าต่าง/แท็บ
+  // ไม่ส่งสำเนาเก่าทับข้อมูลที่อุปกรณ์อื่นอาจเพิ่งบันทึก
   window.addEventListener('pagehide', () => {
-    if (isCloudSynced && !isReloading) persist(true);
+    if (!isReloading) persist(false);
   });
+
+  setInterval(() => {
+    if (!document.hidden && syncStatusState.mode !== 'syncing') loadOnline();
+  }, 30000);
 
   /* ============================================================================
    * src/app/04-utils.js
@@ -641,6 +696,8 @@
     if (!$('entryTitle').value.trim() || !$('entryText').value.trim())
       return toast('เติมชื่อและเรื่องราวสักนิดก่อนวางกล่อง');
     if ($('entryDate').value > localDate()) return toast('เลือกวันที่ไม่เกินวันนี้นะ');
+    if (!isCloudSynced && syncStatusState.mode === 'syncing')
+      return toast('กำลังตรวจสอบข้อมูลคลาวด์ กรุณารอสักครู่แล้วบันทึกอีกครั้ง');
     const entry = {
       id:
         editing ||
@@ -657,8 +714,7 @@
     const i = state.entries.findIndex(x => x.id === editing);
     if (i >= 0) state.entries[i] = entry;
     else state.entries.push(entry);
-    isCloudSynced = true;
-    const ok = persist(true, true);
+    const ok = persist();
     stats();
     renderEntries();
     sceneAPI?.refresh();
@@ -667,7 +723,11 @@
     document.querySelector('.side').classList.remove('open');
     if (typeof peekRender === 'function') peekRender();
     if (typeof bubRender === 'function') bubRender();
-    if (ok) toast(svgInline('leaf') + ' บันทึกความทรงจำเรียบร้อยแล้ว');
+    if (ok) {
+      toast(isCloudSynced
+        ? svgInline('leaf') + ' บันทึกแล้ว · กำลังซิงก์ขึ้นคลาวด์'
+        : svgInline('alert') + ' บันทึกไว้ในเครื่องนี้แล้ว · ยังไม่ได้ซิงก์คลาวด์');
+    }
   };
   function stats() {
     $('memoryCount').textContent = state.entries.length;
@@ -926,7 +986,7 @@
     if (oldToggle) {
       const row = oldToggle.closest('.settings-row');
       row.innerHTML = `
-        <div style="flex:1; padding-right:10px;">ระดับกราฟิก<div class="tiny">เลือก 'อัตโนมัติ' ระบบจะปรับตามสเปคเครื่อง</div><div class="tiny" id="qualityInfo" style="color:#376951; margin-top:3px;">กำลังประเมิน...</div></div>
+        <div style="flex:1; padding-right:10px;">ระดับกราฟิก<div class="tiny">โหมดอัตโนมัติจะปรับความละเอียดและเงาตาม FPS</div><div class="tiny" id="qualityInfo" style="color:#376951; margin-top:3px;">กำลังประเมิน...</div></div>
         <select class="field" style="width:110px; padding:8px;" id="qualityMode">
           <option value="auto">อัตโนมัติ</option>
           <option value="0">ต่ำมาก</option>
@@ -944,6 +1004,71 @@
     }
     if ($('qualityMode')) $('qualityMode').value = state.qualityMode || 'auto';
 
+    let gpuRow = document.getElementById('gpuPreferenceRow');
+    if (!gpuRow) {
+      gpuRow = document.createElement('div');
+      gpuRow.className = 'settings-row';
+      gpuRow.id = 'gpuPreferenceRow';
+      gpuRow.innerHTML = `
+        <div style="flex:1; padding-right:10px;">โหมดการ์ดจอ<div class="tiny">เป็นคำขอถึงเบราว์เซอร์ ไม่สามารถบังคับเลือก GPU โดยตรง</div><div class="tiny" id="gpuRendererInfo" style="color:#376951; margin-top:3px;">กำลังตรวจสอบ renderer...</div></div>
+        <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+          <select class="field" style="width:150px; padding:8px;" id="gpuPreference">
+            <option value="auto">ให้เบราว์เซอร์เลือก</option>
+            <option value="high-performance">ประสิทธิภาพสูง</option>
+            <option value="low-power">ประหยัดพลังงาน</option>
+          </select>
+          <button type="button" class="secondary" id="applyGpuPreference" hidden>โหลดใหม่เพื่อใช้ค่า</button>
+        </div>
+      `;
+      const qualitySelectRow = document.getElementById('qualityMode')?.closest('.settings-row');
+      if (qualitySelectRow) qualitySelectRow.parentNode.insertBefore(gpuRow, qualitySelectRow.nextSibling);
+    }
+    $('gpuPreference').value = state.gpuPreference || 'auto';
+    const gpuInfo = $('gpuRendererInfo');
+    if (gpuInfo) gpuInfo.textContent = sceneAPI?.gpuInfo() || 'ยังไม่พบข้อมูล renderer';
+    $('gpuPreference').onchange = e => {
+      const previousPreference = state.gpuPreference;
+      state.gpuPreference = e.target.value;
+      if (!persist(true, true)) {
+        gpuInfo.textContent = 'บันทึกการตั้งค่าไม่สำเร็จ';
+        state.gpuPreference = previousPreference;
+        e.target.value = previousPreference;
+        return;
+      }
+      $('applyGpuPreference').hidden = false;
+      gpuInfo.textContent = (sceneAPI?.gpuInfo() || 'ตรวจพบ renderer แล้ว') + ' · โหลดหน้าใหม่เพื่อใช้ค่า';
+    };
+    $('applyGpuPreference').onclick = () => {
+      if (!persist(true, true)) {
+        gpuInfo.textContent = 'บันทึกการตั้งค่าไม่สำเร็จ จึงยังไม่โหลดหน้าใหม่';
+        return;
+      }
+      location.reload();
+    };
+
+    let visualRow = document.getElementById('visualMode')?.closest('.settings-row');
+    if (!visualRow) {
+      visualRow = document.createElement('div');
+      visualRow.className = 'settings-row';
+      visualRow.innerHTML = `
+        <label for="visualMode">โทนภาพ<div class="tiny">เพิ่มสีสันแบบเกม แทบไม่เพิ่มภาระการ์ดจอ</div></label>
+        <select class="field" style="width:120px; padding:8px;" id="visualMode">
+          <option value="natural">ธรรมชาติ</option>
+          <option value="vivid">สดใส</option>
+          <option value="game">สีจัดแบบเกม</option>
+        </select>
+      `;
+      const gpuSelectRow = document.getElementById('gpuPreferenceRow')?.closest('.settings-row');
+      const qualitySelectRow = document.getElementById('qualityMode')?.closest('.settings-row');
+      (gpuSelectRow || qualitySelectRow)?.parentNode.insertBefore(visualRow, (gpuSelectRow || qualitySelectRow).nextSibling);
+    }
+    $('visualMode').value = state.visualMode || 'natural';
+    $('visualMode').onchange = e => {
+      state.visualMode = e.target.value;
+      persist(true, true);
+      sceneAPI?.setVisualMode();
+    };
+
     // --- ส่วนเพิ่มใหม่: สร้างแถบแสดงการใช้ RAM ---
     let ramRow = document.getElementById('ramUsageRow');
     if (!ramRow) {
@@ -955,10 +1080,11 @@
         <div id="ramValue" style="font-weight:600; color:#376951; font-size:16px;">กำลังคำนวณ...</div>
       `;
       // แทรกลงไปใต้แถบตั้งค่าระดับกราฟิก
+      const visualSelectRow = document.getElementById('visualMode')?.closest('.settings-row');
+      const gpuSelectRow = document.getElementById('gpuPreferenceRow')?.closest('.settings-row');
       const qualitySelectRow = document.getElementById('qualityMode')?.closest('.settings-row');
-      if (qualitySelectRow && qualitySelectRow.nextSibling) {
-        qualitySelectRow.parentNode.insertBefore(ramRow, qualitySelectRow.nextSibling);
-      }
+      const lastGraphicsRow = visualSelectRow || gpuSelectRow || qualitySelectRow;
+      if (lastGraphicsRow) lastGraphicsRow.parentNode.insertBefore(ramRow, lastGraphicsRow.nextSibling);
     }
 
     // ฟังก์ชันอัปเดต RAM แบบเรียลไทม์
@@ -2592,9 +2718,7 @@
           ? 0 // 0: ต่ำมาก
           : cores <= 4 || memory <= 4
             ? 1 // 1: ต่ำ
-            : (coarsePointer && devicePixelRatio > 2)
-              ? 2 // 2: ปานกลาง (สำหรับมือถือจอละเอียด)
-              : 3; // 3: สูง (เริ่มต้นที่สูงก่อน ถ้าไหวระบบจะดันไป 4: สูงมาก เอง)
+            : 2; // เริ่มปานกลาง เพราะจำนวนคอร์และ RAM ไม่ได้บอกกำลัง GPU โดยตรง
     let qualityLevel = initialQuality,
       activeQuality = -1,
       qualitySampleMs = 0,
@@ -2602,9 +2726,13 @@
       qualityFrames = 0,
       qualitySlowMs = 0,
       qualityStableMs = 0,
+      nearPerformanceHotspot = false,
+      performanceHotspotLabel = '',
       renderer;
     try {
-      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' }); 
+      const powerPreference =
+        state.gpuPreference === 'low-power' ? 'low-power' : state.gpuPreference === 'high-performance' ? 'high-performance' : 'default';
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference });
     } catch (e) {
       $('loading').innerHTML =
         '<p>อุปกรณ์นี้ยังแสดง WebGL 3D ไม่ได้<br>ส่วนสมุดบันทึกและมุมพักใจยังใช้งานได้</p>';
@@ -4357,6 +4485,7 @@
       const N = 90,
         pos = new Float32Array(N * 3),
         base = [],
+        clusterT = [0.12, 0.28, 0.43, 0.58, 0.74, 0.9],
         r = (() => {
           let q = 777;
           return () => {
@@ -4365,8 +4494,8 @@
           };
         })();
       for (let i = 0; i < N; i++) {
-        const o = offRoad(0.02 + r() * 0.96, (r() < 0.5 ? -1 : 1) * (5 + r() * 9));
-        base.push([o.x, 0.6 + r() * 1.8, o.z, r() * 6]);
+        const o = offRoad(clusterT[Math.floor(i / (N / clusterT.length))], (r() < 0.5 ? -1 : 1) * (5 + r() * 9));
+        base.push([o.x + (r() - 0.5) * 3.2, 0.6 + r() * 1.8, o.z + (r() - 0.5) * 3.2, r() * 6]);
       }
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -4379,23 +4508,76 @@
           blending: THREE.AdditiveBlending
         }),
         p = new THREE.Points(geo, m);
+      const bodyGeo = new THREE.IcosahedronGeometry(0.055, 0),
+        abdomenGeo = new THREE.OctahedronGeometry(0.045, 0),
+        wingShape = new THREE.Shape(),
+        bodyMat = new THREE.MeshLambertMaterial({ color: 0x40392d }),
+        abdomenMat = new THREE.MeshBasicMaterial({ color: 0xffdc64, transparent: true, opacity: 0.95 }),
+        wingMat = new THREE.MeshBasicMaterial({ color: 0xc9c5a0, transparent: true, opacity: 0.58, side: THREE.DoubleSide, depthWrite: false }),
+        body = new THREE.InstancedMesh(bodyGeo, bodyMat, N),
+        abdomen = new THREE.InstancedMesh(abdomenGeo, abdomenMat, N),
+        wings = new THREE.InstancedMesh(
+          (() => {
+            wingShape.moveTo(0, 0);
+            wingShape.lineTo(0.12, 0.025);
+            wingShape.lineTo(0.17, 0.08);
+            wingShape.lineTo(0.1, 0.105);
+            wingShape.lineTo(0.025, 0.07);
+            wingShape.closePath();
+            return new THREE.ShapeGeometry(wingShape);
+          })(),
+          wingMat,
+          N * 2
+        ),
+        dummy = new THREE.Object3D();
+      body.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      abdomen.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      wings.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      body.frustumCulled = abdomen.frustumCulled = wings.frustumCulled = false;
+      body.visible = abdomen.visible = wings.visible = false;
       p.frustumCulled = false;
       p.visible = false;
-      scene.add(p);
-      return { p, m, base, pos, geo, N };
+      scene.add(p, body, abdomen, wings);
+      return { p, m, base, pos, geo, N, body, abdomen, wings, dummy };
     })();
     function fireflies() {
       FF.m.opacity = nl * 0.9;
-      FF.p.visible = nl > 0.03;
-      if (!FF.p.visible) return;
+      const active = nl > 0.03;
+      FF.p.visible = FF.body.visible = FF.abdomen.visible = FF.wings.visible = active;
+      if (!active) return;
       const t = state.reduced ? 0 : totalTime;
       for (let i = 0; i < FF.N; i++) {
-        const b = FF.base[i];
-        FF.pos[i * 3] = b[0] + Math.sin(t * 0.5 + b[3]) * 0.7;
-        FF.pos[i * 3 + 1] = b[1] + Math.sin(t * 0.8 + b[3] * 2) * 0.35;
-        FF.pos[i * 3 + 2] = b[2] + Math.cos(t * 0.4 + b[3]) * 0.7;
+        const b = FF.base[i],
+          x = b[0] + Math.sin(t * 0.5 + b[3]) * 0.7,
+          y = b[1] + Math.sin(t * 0.8 + b[3] * 2) * 0.35,
+          z = b[2] + Math.cos(t * 0.4 + b[3]) * 0.7,
+          blink = 0.3 + Math.max(0, Math.sin(t * 3.2 + b[3] * 2.4)) * 0.7;
+        FF.pos[i * 3] = x;
+        FF.pos[i * 3 + 1] = y;
+        FF.pos[i * 3 + 2] = z;
+        FF.dummy.position.set(x, y, z);
+        FF.dummy.rotation.set(0, b[3], 0);
+        FF.dummy.scale.set(1, 0.75, 1.15);
+        FF.dummy.updateMatrix();
+        FF.body.setMatrixAt(i, FF.dummy.matrix);
+        FF.dummy.position.set(x, y - 0.018, z + Math.cos(b[3]) * 0.055);
+        FF.dummy.scale.setScalar(blink);
+        FF.dummy.updateMatrix();
+        FF.abdomen.setMatrixAt(i, FF.dummy.matrix);
+        const flap = Math.sin(t * 18 + b[3]) * 0.12;
+        FF.dummy.position.set(x - 0.025, y + 0.015, z);
+        FF.dummy.rotation.set(0, b[3], flap);
+        FF.dummy.scale.set(-1, 1, 1);
+        FF.dummy.updateMatrix();
+        FF.wings.setMatrixAt(i * 2, FF.dummy.matrix);
+        FF.dummy.position.x = x + 0.025;
+        FF.dummy.rotation.z = -flap;
+        FF.dummy.scale.x = 1;
+        FF.dummy.updateMatrix();
+        FF.wings.setMatrixAt(i * 2 + 1, FF.dummy.matrix);
       }
       FF.geo.attributes.position.needsUpdate = true;
+      FF.body.instanceMatrix.needsUpdate = FF.abdomen.instanceMatrix.needsUpdate = FF.wings.instanceMatrix.needsUpdate = true;
     }
 
     // ระบบละอองเกสร/ดอกหญ้าปลิวลมยามกลางวัน (Dandelions)
@@ -4438,6 +4620,243 @@
       }
       DD.geo.attributes.position.needsUpdate = true;
     }
+
+    // จุดแมลงและกบใช้ InstancedMesh ชุดเล็ก และซ่อน instance ที่อยู่ไกลจากรถ
+    const roadsideWildlife = (() => {
+      const spots = [
+        { t: 0.16, side: -1 }, { t: 0.36, side: 1 },
+        { t: 0.57, side: -1 }, { t: 0.75, side: 1 }, { t: 0.9, side: -1 }
+      ];
+      let seed = 19871;
+      const rand = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+      const scatter = (count, heightMin, heightRange, colors) => {
+        const out = [];
+        for (let i = 0; i < count; i++) {
+          const spot = spots[i % spots.length],
+            p = offRoad(spot.t + (rand() - 0.5) * 0.006, spot.side * (5.5 + rand() * 4.5));
+          out.push({
+            x: p.x + (rand() - 0.5) * 2.4,
+            y: heightMin + rand() * heightRange,
+            z: p.z + (rand() - 0.5) * 2.4,
+            yaw: rand() * Math.PI * 2,
+            phase: rand() * Math.PI * 2,
+            color: colors[i % colors.length]
+          });
+        }
+        return out;
+      };
+      const makeBatch = (geometry, material, count) => {
+        const mesh = new THREE.InstancedMesh(geometry, material, count);
+        mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        mesh.frustumCulled = false;
+        scene.add(mesh);
+        return mesh;
+      };
+      const makeWing = (points) => {
+        const shape = new THREE.Shape();
+        shape.moveTo(points[0][0], points[0][1]);
+        for (let i = 1; i < points.length; i++) shape.lineTo(points[i][0], points[i][1]);
+        shape.closePath();
+        const geometry = new THREE.ShapeGeometry(shape);
+        geometry.computeVertexNormals();
+        return geometry;
+      };
+      const butterflyWingGeo = makeWing([[0, -0.08], [0.48, -0.02], [0.88, 0.2], [0.92, 0.46], [0.68, 0.58], [0.34, 0.38], [0.1, 0.18]]),
+        dragonflyWingGeo = makeWing([[0, -0.04], [0.45, -0.025], [0.96, 0], [1, 0.055], [0.52, 0.075], [0.08, 0.04]]);
+      const dummy = new THREE.Object3D(),
+        color = new THREE.Color(),
+        butterflyData = scatter(20, 0.65, 1.3, [0xffc857, 0xff83a8, 0x8ee3a1, 0xb9a0ff]),
+        dragonflyData = scatter(15, 0.35, 0.8, [0x73d9c2, 0x6bb8ed, 0xa2d77a]),
+        frogData = scatter(6, 0, 0, [0x62944c, 0x789d45, 0x4f8050]),
+        butterflyBody = makeBatch(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true }), butterflyData.length),
+        butterflyHead = makeBatch(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ color: 0x32271f, flatShading: true }), butterflyData.length),
+        butterflyWings = makeBatch(butterflyWingGeo, new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide, flatShading: true }), butterflyData.length * 2),
+        butterflySpots = makeBatch(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ color: 0x49344b, flatShading: true }), butterflyData.length * 4),
+        dragonflyBody = makeBatch(new THREE.CylinderGeometry(0.55, 0.18, 1, 6).rotateX(Math.PI / 2), new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true }), dragonflyData.length),
+        dragonflyHead = makeBatch(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ color: 0x263e39, flatShading: true }), dragonflyData.length),
+        dragonflyEyes = makeBatch(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ color: 0xc8444c, flatShading: true }), dragonflyData.length * 2),
+        dragonflyWings = makeBatch(dragonflyWingGeo, new THREE.MeshLambertMaterial({ color: 0xb8eee9, transparent: true, opacity: 0.84, side: THREE.DoubleSide, flatShading: true }), dragonflyData.length * 4),
+        frogBody = makeBatch(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true }), frogData.length),
+        frogHead = makeBatch(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true }), frogData.length),
+        frogEyes = makeBatch(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ color: 0xd7d77a, flatShading: true }), frogData.length * 2),
+        frogPupils = makeBatch(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ color: 0x202820, flatShading: true }), frogData.length * 2),
+        frogLegs = makeBatch(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ color: 0x527f43, flatShading: true }), frogData.length * 4),
+        frogFeet = makeBatch(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ color: 0x527f43, flatShading: true }), frogData.length * 2),
+        frogToes = makeBatch(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ color: 0x6c9e50, flatShading: true }), frogData.length * 6);
+
+      const tintInstances = (mesh, entries) => entries.forEach((entry, i) => {
+        color.setHex(entry.color);
+        mesh.setColorAt(i, color);
+      });
+      tintInstances(butterflyBody, butterflyData);
+      tintInstances(butterflyWings, butterflyData.flatMap(entry => [entry, entry]));
+      tintInstances(butterflySpots, butterflyData.flatMap(entry => [entry, entry, entry, entry]));
+      tintInstances(dragonflyBody, dragonflyData);
+      tintInstances(dragonflyHead, dragonflyData);
+      tintInstances(frogBody, frogData);
+      tintInstances(frogHead, frogData);
+      tintInstances(frogLegs, frogData.flatMap(entry => [entry, entry, entry, entry]));
+      tintInstances(frogFeet, frogData.flatMap(entry => [entry, entry]));
+      tintInstances(frogToes, frogData.flatMap(entry => [entry, entry, entry, entry, entry, entry]));
+      for (let i = 0; i < frogData.length * 2; i++) {
+        color.setHex(0xf0d76e);
+        frogEyes.setColorAt(i, color);
+      }
+      for (const mesh of [butterflyBody, butterflyHead, butterflyWings, butterflySpots, dragonflyBody, dragonflyHead, dragonflyEyes, frogBody, frogHead, frogEyes, frogLegs, frogFeet, frogToes]) {
+        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      }
+
+      const transform = (mesh, index, x, y, z, yaw, rz, sx, sy, sz, rx = 0) => {
+        dummy.position.set(x, y, z);
+        dummy.rotation.set(rx, yaw, rz);
+        dummy.scale.set(sx, sy, sz);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(index, dummy.matrix);
+      };
+      const localPoint = (entry, yaw, lx, lz) => [
+        entry.x + lx * Math.cos(yaw) + lz * Math.sin(yaw),
+        entry.z - lx * Math.sin(yaw) + lz * Math.cos(yaw)
+      ];
+      const hideInstance = (mesh, index) => transform(mesh, index, 0, -1000, 0, 0, 0, 0, 0, 0);
+      const wildlifeMeshes = [
+        butterflyBody, butterflyHead, butterflyWings, butterflySpots,
+        dragonflyBody, dragonflyHead, dragonflyEyes, dragonflyWings,
+        frogBody, frogHead, frogEyes, frogPupils, frogLegs, frogFeet, frogToes
+      ];
+      const update = () => {
+        const range = state.reduced ? 42 : 72,
+          rangeSq = range * range,
+          time = state.reduced ? Math.floor(totalTime * 4) / 4 : totalTime,
+          rain = window.RODENV ? window.RODENV.rain() : 0,
+          butterfliesActive = !state.night && rain < 0.25,
+          dragonfliesActive = rain < 0.45;
+        let visibleButterflies = false, visibleDragonflies = false, visibleFrogs = false;
+
+        butterflyData.forEach((b, i) => {
+          const dx = b.x - car.position.x, dz = b.z - car.position.z,
+            near = dx * dx + dz * dz < rangeSq && butterfliesActive;
+          if (!near) {
+            hideInstance(butterflyBody, i);
+            hideInstance(butterflyHead, i);
+            hideInstance(butterflyWings, i * 2);
+            hideInstance(butterflyWings, i * 2 + 1);
+            for (let spot = 0; spot < 4; spot++) hideInstance(butterflySpots, i * 4 + spot);
+            return;
+          }
+          visibleButterflies = true;
+          const x = b.x + Math.sin(time * 1.6 + b.phase) * 0.4,
+            y = b.y + Math.sin(time * 2.6 + b.phase) * 0.2,
+            z = b.z + Math.cos(time * 1.3 + b.phase) * 0.35,
+            flap = Math.sin(time * 12 + b.phase) * 0.58,
+            wingRoot = localPoint({ x, z }, b.yaw, 0, 0),
+            spotL = localPoint({ x, z }, b.yaw, -0.15, 0.015),
+            spotR = localPoint({ x, z }, b.yaw, 0.15, 0.015);
+          transform(butterflyBody, i, x, y, z, b.yaw, 0, 0.032, 0.04, 0.11);
+          transform(butterflyHead, i, x, y + 0.012, z + 0.105, b.yaw, 0, 0.026, 0.026, 0.026);
+          transform(butterflyWings, i * 2, wingRoot[0], y + 0.015, wingRoot[1], b.yaw, flap, -0.27, 0.25, 0.012);
+          transform(butterflyWings, i * 2 + 1, wingRoot[0], y + 0.015, wingRoot[1], b.yaw, -flap, 0.27, 0.25, 0.012);
+          transform(butterflySpots, i * 4, spotL[0], y + 0.105, spotL[1], b.yaw, flap, 0.022, 0.028, 0.01);
+          transform(butterflySpots, i * 4 + 1, spotL[0], y + 0.19, spotL[1] + 0.012, b.yaw, flap, 0.014, 0.018, 0.01);
+          transform(butterflySpots, i * 4 + 2, spotR[0], y + 0.105, spotR[1], b.yaw, -flap, 0.022, 0.028, 0.01);
+          transform(butterflySpots, i * 4 + 3, spotR[0], y + 0.19, spotR[1] + 0.012, b.yaw, -flap, 0.014, 0.018, 0.01);
+        });
+
+        dragonflyData.forEach((b, i) => {
+          const dx = b.x - car.position.x, dz = b.z - car.position.z,
+            near = dx * dx + dz * dz < rangeSq && dragonfliesActive;
+          if (!near) {
+            hideInstance(dragonflyBody, i);
+            hideInstance(dragonflyHead, i);
+            hideInstance(dragonflyEyes, i * 2);
+            hideInstance(dragonflyEyes, i * 2 + 1);
+            for (let wing = 0; wing < 4; wing++) hideInstance(dragonflyWings, i * 4 + wing);
+            return;
+          }
+          visibleDragonflies = true;
+          const x = b.x + Math.sin(time * 2.2 + b.phase) * 0.28,
+            y = b.y + Math.sin(time * 3.4 + b.phase) * 0.12,
+            z = b.z + Math.cos(time * 1.7 + b.phase) * 0.3,
+            flap = Math.sin(time * 20 + b.phase) * 0.11,
+            wingRootL = localPoint({ x, z }, b.yaw, -0.015, 0.025),
+            wingRootR = localPoint({ x, z }, b.yaw, 0.015, 0.025),
+            rearRootL = localPoint({ x, z }, b.yaw, -0.015, -0.035),
+            rearRootR = localPoint({ x, z }, b.yaw, 0.015, -0.035),
+            eyeL = localPoint({ x, z }, b.yaw, -0.026, 0.205),
+            eyeR = localPoint({ x, z }, b.yaw, 0.026, 0.205);
+          transform(dragonflyBody, i, x, y, z, b.yaw, 0, 0.022, 0.022, 0.2);
+          transform(dragonflyHead, i, x, y + 0.006, z + 0.19, b.yaw, 0, 0.034, 0.034, 0.034);
+          transform(dragonflyEyes, i * 2, eyeL[0], y + 0.025, eyeL[1], b.yaw, 0, 0.018, 0.018, 0.018);
+          transform(dragonflyEyes, i * 2 + 1, eyeR[0], y + 0.025, eyeR[1], b.yaw, 0, 0.018, 0.018, 0.018);
+          transform(dragonflyWings, i * 4, wingRootL[0], y + 0.022, wingRootL[1], b.yaw, flap, -0.22, 0.018, 0.012, 0);
+          transform(dragonflyWings, i * 4 + 1, wingRootR[0], y + 0.022, wingRootR[1], b.yaw, -flap, 0.22, 0.018, 0.012, 0);
+          transform(dragonflyWings, i * 4 + 2, rearRootL[0], y + 0.022, rearRootL[1], b.yaw, flap * 0.8, -0.19, 0.015, 0.01, 0);
+          transform(dragonflyWings, i * 4 + 3, rearRootR[0], y + 0.022, rearRootR[1], b.yaw, -flap * 0.8, 0.19, 0.015, 0.01, 0);
+        });
+
+        frogData.forEach((f, i) => {
+          const dx = f.x - car.position.x, dz = f.z - car.position.z,
+            near = dx * dx + dz * dz < rangeSq;
+          if (!near) {
+            hideInstance(frogBody, i);
+            hideInstance(frogHead, i);
+            hideInstance(frogEyes, i * 2);
+            hideInstance(frogEyes, i * 2 + 1);
+            hideInstance(frogPupils, i * 2);
+            hideInstance(frogPupils, i * 2 + 1);
+            for (let leg = 0; leg < 4; leg++) hideInstance(frogLegs, i * 4 + leg);
+            hideInstance(frogFeet, i * 2);
+            hideInstance(frogFeet, i * 2 + 1);
+            for (let toe = 0; toe < 6; toe++) hideInstance(frogToes, i * 6 + toe);
+            return;
+          }
+          visibleFrogs = true;
+          const cycle = (time + f.phase) % 3.8,
+            jumpU = cycle < 0.72 ? cycle / 0.72 : 0,
+            jump = cycle < 0.72 ? Math.sin(jumpU * Math.PI) * 0.38 : 0,
+            yaw = f.yaw,
+            x = f.x + Math.sin(yaw) * jumpU * 0.4,
+            z = f.z + Math.cos(yaw) * jumpU * 0.4,
+            bodyY = 0.13 + jump,
+            head = localPoint({ x, z }, yaw, 0, 0.17),
+            eyeL = localPoint({ x, z }, yaw, -0.075, 0.2),
+            eyeR = localPoint({ x, z }, yaw, 0.075, 0.2),
+            hindL = localPoint({ x, z }, yaw, -0.13, -0.08),
+            hindR = localPoint({ x, z }, yaw, 0.13, -0.08),
+            foreL = localPoint({ x, z }, yaw, -0.09, 0.06),
+            foreR = localPoint({ x, z }, yaw, 0.09, 0.06),
+            footL = localPoint({ x, z }, yaw, -0.14, 0.18),
+            footR = localPoint({ x, z }, yaw, 0.14, 0.18);
+          transform(frogBody, i, x, bodyY, z, yaw, 0, 0.17, 0.12, 0.21);
+          transform(frogHead, i, head[0], bodyY + 0.06, head[1], yaw, 0, 0.13, 0.11, 0.13);
+          transform(frogEyes, i * 2, eyeL[0], bodyY + 0.14, eyeL[1], yaw, 0, 0.045, 0.055, 0.045);
+          transform(frogEyes, i * 2 + 1, eyeR[0], bodyY + 0.14, eyeR[1], yaw, 0, 0.045, 0.055, 0.045);
+          transform(frogPupils, i * 2, eyeL[0], bodyY + 0.18, eyeL[1] + 0.025, yaw, 0, 0.018, 0.023, 0.018);
+          transform(frogPupils, i * 2 + 1, eyeR[0], bodyY + 0.18, eyeR[1] + 0.025, yaw, 0, 0.018, 0.023, 0.018);
+          transform(frogLegs, i * 4, hindL[0], bodyY - 0.055, hindL[1], yaw, -0.48, 0.1, 0.07, 0.15);
+          transform(frogLegs, i * 4 + 1, hindR[0], bodyY - 0.055, hindR[1], yaw, 0.48, 0.1, 0.07, 0.15);
+          transform(frogLegs, i * 4 + 2, foreL[0], bodyY - 0.06, foreL[1], yaw, -0.2, 0.055, 0.055, 0.12);
+          transform(frogLegs, i * 4 + 3, foreR[0], bodyY - 0.06, foreR[1], yaw, 0.2, 0.055, 0.055, 0.12);
+          transform(frogFeet, i * 2, footL[0], bodyY - 0.08, footL[1], yaw, 0, 0.075, 0.035, 0.095);
+          transform(frogFeet, i * 2 + 1, footR[0], bodyY - 0.08, footR[1], yaw, 0, 0.075, 0.035, 0.095);
+          for (let toe = 0; toe < 3; toe++) {
+            const spread = (toe - 1) * 0.045,
+              toeL = localPoint({ x: footL[0], z: footL[1] }, yaw, spread, 0.07),
+              toeR = localPoint({ x: footR[0], z: footR[1] }, yaw, spread, 0.07);
+            transform(frogToes, i * 6 + toe, toeL[0], bodyY - 0.085, toeL[1], yaw, spread * 3, 0.025, 0.022, 0.06);
+            transform(frogToes, i * 6 + 3 + toe, toeR[0], bodyY - 0.085, toeR[1], yaw, spread * 3, 0.025, 0.022, 0.06);
+          }
+        });
+
+        butterflyBody.visible = butterflyHead.visible = butterflyWings.visible = butterflySpots.visible = visibleButterflies;
+        dragonflyBody.visible = dragonflyHead.visible = dragonflyEyes.visible = dragonflyWings.visible = visibleDragonflies;
+        frogBody.visible = frogHead.visible = frogEyes.visible = frogPupils.visible =
+          frogLegs.visible = frogFeet.visible = frogToes.visible = visibleFrogs;
+        for (const mesh of wildlifeMeshes) {
+          if (mesh.visible) mesh.instanceMatrix.needsUpdate = true;
+        }
+      };
+      return update;
+    })();
     
     // แผ่นพื้นดินผสมหญ้าขอบฟุ้งเนียน (Shared Ground Dirt-Grass Blend Patch) สำหรับวางใต้สิ่งปลูกสร้างและร้านค้า
     const _groundPatchGeo = new THREE.PlaneGeometry(1, 1);
@@ -4763,12 +5182,15 @@
         [hut, 2.2]
       ];
       let placedN = 0;
-      for (const [fn, rad] of spec) {
+      spec.forEach(([fn, rad], index) => {
         // ขยายสเกลบ้านให้มีขนาดสมจริงเมื่อเทียบกับตัวรถและคน (1.42x - 1.82x)
         const sc = 1.42 + rn() * 0.4;
         for (let k = 0; k < 300; k++) {
           const sd = rn() < 0.5 ? -1 : 1,
-            t = 0.05 + rn() * 0.9,
+            t =
+              index >= spec.length / 2
+                ? tAt(136) + rn() * (tAt(169) - tAt(136))
+                : 0.05 + rn() * 0.9,
             o = offRoad(t, sd * (10.5 + rn() * 9));
           if (!spotOK(o.x, o.z, rad * sc * 0.72 + 0.4)) continue;
           taken.push([o.x, o.z, rad * sc * 0.72]);
@@ -4781,7 +5203,7 @@
           placedN++;
           break;
         }
-      }
+      });
       const tuftGeo = buildReedClusterGeo(false);
       const tufts = new THREE.InstancedMesh(tuftGeo, swayMat(0.5), 260),
         dm = new THREE.Object3D();
@@ -5992,45 +6414,175 @@
         });
     });
 
-    // 3. จุดกางเต็นท์และกองไฟผิงไฟ [ออกเฉพาะกลางคืนที่ฝนไม่ตก]
+    // 3. แคมป์ริมแม่น้ำและกองไฟ [ออกเฉพาะกลางคืนที่ฝนไม่ตก]
     [0.55, 0.78].forEach(t => {
         const o = offRoad(t, -9);
         const campGrp = new THREE.Group();
         campGrp.position.set(o.x, 0, o.z);
         campGrp.rotation.y = Math.atan2(o.tn.x, o.tn.z);
-        
-        // เต็นท์ทรงสามเหลี่ยม 2 หลัง
-        const tentGeo = new THREE.CylinderGeometry(0.8, 0.8, 1.8, 3);
-        tentGeo.rotateZ(Math.PI / 2); tentGeo.rotateY(Math.PI / 2);
-        const tent1 = new THREE.Mesh(tentGeo, sm2(0x5a9e4b)); 
-        tent1.position.set(-2, 0.4, -1);
-        const tent2 = new THREE.Mesh(tentGeo, sm2(0xd9534a)); 
-        tent2.position.set(2, 0.4, 1.5); tent2.rotation.y = 0.5;
-        campGrp.add(tent1, tent2);
 
-        // กองไฟพร้อมหินล้อม
-        const fireLight = new THREE.PointLight(0xff6600, 2, 8);
-        fireLight.position.set(0, 0.5, 0);
-        campGrp.add(fireLight);
-        for(let i=0; i<6; i++) {
-            const a = (i/6) * Math.PI * 2;
-            ball(0.12, sm2(0x555555), Math.cos(a)*0.4, 0.05, Math.sin(a)*0.4, campGrp);
+        const groundMat = sm2(0x554331),
+          tentMat = sm2(0x56704c),
+          tentInnerMat = sm2(0x252a24),
+          skinMat = sm2(0xc58b68),
+          trouserMat = sm2(0x343b3c),
+          logMat = sm2(0x463222),
+          stoneMat = sm2(0x67665f),
+          emberMat = new THREE.MeshBasicMaterial({ color: 0xff581b }),
+          flameOuterMat = new THREE.MeshBasicMaterial({ color: 0xff6a1a, transparent: true, opacity: 0.88 }),
+          flameInnerMat = new THREE.MeshBasicMaterial({ color: 0xffd05a, transparent: true, opacity: 0.96 });
+
+        const campsitePad = ball(1, groundMat, 0, 0.018, 0.2, campGrp, 2.45, 0.035, 2.2);
+        campsitePad.receiveShadow = true;
+
+        // เต็นท์ผ้าใบทรง A-frame พร้อมช่องประตูเปิด
+        const tentGrp = new THREE.Group();
+        tentGrp.position.set(0, 0, -2.35);
+        campGrp.add(tentGrp);
+        box(1.9, 0.035, 2.05, sm2(0x625746), 0, 0.025, 0, tentGrp);
+        for (const side of [-1, 1]) {
+          const panel = box(1.48, 0.055, 2.05, tentMat, side * 0.39, 0.54, 0, tentGrp);
+          panel.rotation.z = -side * 0.86;
+          panel.castShadow = true;
         }
-        const flame = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.5, 4), new THREE.MeshBasicMaterial({color: 0xffaa00}));
-        flame.position.set(0, 0.25, 0);
-        campGrp.add(flame);
-        
-        // คนนั่งผิงไฟ
-        createSimplePerson(0x2f4a6b, campGrp, -0.8, 0, 0).rotation.y = Math.PI / 2;
-        createSimplePerson(0xc7a4d0, campGrp, 0.8, 0, -0.3).rotation.y = -Math.PI / 2;
+        const tentEndShape = new THREE.Shape();
+        tentEndShape.moveTo(-0.74, 0);
+        tentEndShape.lineTo(0.74, 0);
+        tentEndShape.lineTo(0, 1.1);
+        tentEndShape.closePath();
+        const tentEndGeo = new THREE.ShapeGeometry(tentEndShape);
+        const tentEndMat = new THREE.MeshStandardMaterial({ color: 0x4b6242, roughness: 0.94, side: THREE.DoubleSide });
+        for (const z of [-1.02, 1.02]) {
+          const end = new THREE.Mesh(tentEndGeo, tentEndMat);
+          end.position.set(0, 0.04, z);
+          tentGrp.add(end);
+        }
+        const tentDoorShape = new THREE.Shape();
+        tentDoorShape.moveTo(-0.29, 0.05);
+        tentDoorShape.lineTo(0.29, 0.05);
+        tentDoorShape.lineTo(0, 0.78);
+        tentDoorShape.closePath();
+        const tentDoor = new THREE.Mesh(new THREE.ShapeGeometry(tentDoorShape), new THREE.MeshBasicMaterial({ color: 0x252a24, side: THREE.DoubleSide }));
+        tentDoor.position.set(0, 0.04, 1.03);
+        tentGrp.add(tentDoor);
+        cyl(0.025, 0.025, 1.2, sm2(0x6a5132), 0, 0.6, -2.35, campGrp);
+
+        // ดินเถ้ารอบกองไฟ หินวางแบบไม่เป็นวงกลมสมบูรณ์ และฟืนวางซ้อนกัน
+        const fireGrp = new THREE.Group();
+        fireGrp.position.set(0, 0, 0.2);
+        campGrp.add(fireGrp);
+        ball(0.55, sm2(0x30271f), 0, 0.035, 0, fireGrp, 1.3, 0.08, 0.9);
+        for (let i = 0; i < 9; i++) {
+          const a = (i / 9) * Math.PI * 2 + 0.12;
+          const stone = ball(
+            0.13,
+            stoneMat,
+            Math.cos(a) * (0.48 + (i % 3) * 0.025),
+            0.075,
+            Math.sin(a) * (0.38 + (i % 2) * 0.035),
+            fireGrp,
+            1.3 + (i % 3) * 0.2,
+            0.7 + (i % 2) * 0.18,
+            0.9
+          );
+          stone.rotation.y = a;
+        }
+        for (let i = 0; i < 3; i++) {
+          const log = cyl(0.055, 0.07, 0.78, logMat, 0, 0.11 + i * 0.035, 0, fireGrp);
+          log.rotation.set(Math.PI / 2, i * Math.PI / 3, 0);
+        }
+        ball(0.18, emberMat, 0, 0.1, 0, fireGrp, 1.2, 0.35, 1.05);
+
+        const flame = new THREE.Group();
+        flame.position.y = 0.1;
+        fireGrp.add(flame);
+        const outerFlames = [];
+        for (let i = 0; i < 3; i++) {
+          const tongue = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.62, 6), flameOuterMat);
+          tongue.position.set((i - 1) * 0.13, 0.3 + (i === 1 ? 0.07 : 0), (i % 2) * 0.12 - 0.06);
+          tongue.rotation.z = (i - 1) * 0.18;
+          flame.add(tongue);
+          outerFlames.push(tongue);
+        }
+        const flameCore = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.38, 6), flameInnerMat);
+        flameCore.position.set(0, 0.23, 0);
+        flame.add(flameCore);
+        const fireLight = new THREE.PointLight(0xff762e, 2.1, 9);
+        fireLight.position.set(0, 0.55, 0);
+        campGrp.add(fireLight);
+
+        const limb = (parent, material, from, to, radius) => {
+          const start = new THREE.Vector3(...from);
+          const end = new THREE.Vector3(...to);
+          const direction = end.clone().sub(start);
+          const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.82, radius, direction.length(), 7), material);
+          mesh.position.copy(start.add(end).multiplyScalar(0.5));
+          mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+          mesh.castShadow = true;
+          parent.add(mesh);
+          return mesh;
+        };
+        const makeCamper = (color, x, z, yaw, seated) => {
+          const person = new THREE.Group();
+          person.position.set(x, 0, z);
+          person.rotation.y = yaw;
+          campGrp.add(person);
+          const shirt = sm2(color);
+          if (seated) {
+            const seat = cyl(0.17, 0.18, 1.05, logMat, 0, 0.2, -0.06, person, Math.PI / 2);
+            seat.castShadow = true;
+            ball(0.18, trouserMat, 0, 0.37, -0.08, person, 1.2, 0.65, 1.25);
+            limb(person, trouserMat, [-0.1, 0.38, 0], [-0.11, 0.12, 0.28], 0.085);
+            limb(person, trouserMat, [0.1, 0.38, 0], [0.11, 0.12, 0.28], 0.085);
+            limb(person, trouserMat, [-0.11, 0.12, 0.28], [-0.11, 0.08, 0.48], 0.065);
+            limb(person, trouserMat, [0.11, 0.12, 0.28], [0.11, 0.08, 0.48], 0.065);
+            box(0.13, 0.07, 0.22, sm2(0x292a28), -0.11, 0.055, 0.52, person);
+            box(0.13, 0.07, 0.22, sm2(0x292a28), 0.11, 0.055, 0.52, person);
+            limb(person, shirt, [-0.15, 0.64, -0.02], [0, 0.48, 0.08], 0.1);
+            limb(person, shirt, [0.15, 0.64, -0.02], [0, 0.48, 0.08], 0.1);
+          } else {
+            ball(0.19, trouserMat, 0, 0.31, -0.06, person, 1.1, 0.7, 1.2);
+            for (const side of [-1, 1]) {
+              limb(person, trouserMat, [side * 0.1, 0.32, -0.04], [side * 0.13, 0.1, 0.19], 0.085);
+              limb(person, trouserMat, [side * 0.13, 0.1, 0.19], [side * 0.13, 0.08, -0.12], 0.065);
+              box(0.13, 0.07, 0.2, sm2(0x292a28), side * 0.13, 0.055, -0.2, person);
+            }
+            limb(person, shirt, [-0.16, 0.66, 0], [-0.2, 0.5, 0.2], 0.085);
+            limb(person, shirt, [0.16, 0.66, 0], [0.19, 0.5, 0.2], 0.085);
+            limb(person, skinMat, [-0.2, 0.5, 0.2], [-0.15, 0.4, 0.44], 0.045);
+            limb(person, skinMat, [0.19, 0.5, 0.2], [0.15, 0.4, 0.44], 0.045);
+            ball(0.045, skinMat, 0, 0.4, 0.45, person);
+          }
+          limb(person, shirt, [0, 0.38, 0], [0, 0.69, -0.04], 0.16);
+          ball(0.125, skinMat, 0, 0.83, -0.035, person, 0.9, 1.05, 0.9);
+          ball(0.13, sm2(0x29231f), 0, 0.9, -0.055, person, 1.05, 0.38, 1.0);
+          return person;
+        };
+
+        // คนนั่งดูแลกองไฟ และอีกคนคุกเข่าคอยจัดฟืน
+        makeCamper(0x40566a, 1.25, 0.65, -Math.PI / 2, true);
+        const fireTender = makeCamper(0x76513c, -0.9, 0.28, Math.PI / 2, false);
+        const firePoker = cyl(0.018, 0.018, 0.92, sm2(0x4c4335), -0.15, 0.42, 0.55, fireTender);
+        firePoker.rotation.x = Math.PI / 2;
+        firePoker.rotation.z = 0.16;
+
+        // ฟืนสำรองและตะกร้าเก็บของข้างเต็นท์
+        for (let i = 0; i < 4; i++) {
+          const wood = cyl(0.055, 0.06, 0.68, logMat, 0.94 + (i % 2) * 0.08, 0.08 + Math.floor(i / 2) * 0.1, -1.55 + (i % 2) * 0.12, campGrp, Math.PI / 2);
+          wood.rotation.z = i * 0.12;
+        }
+        box(0.48, 0.33, 0.34, sm2(0x8c704a), -1.25, 0.17, -1.2, campGrp);
 
         scene.add(campGrp);
         window.dynamicEvents.push({
             group: campGrp,
             condition: (s, rain) => s.night === true && rain < 0.1,
             update: (dt, time) => { // แอนิเมชันกองไฟพริ้วไหว
-                flame.scale.set(1 + Math.sin(time*10)*0.1, 1 + Math.random()*0.2, 1 + Math.cos(time*12)*0.1);
-                fireLight.intensity = 1.5 + Math.random();
+                flame.scale.set(1 + Math.sin(time * 10) * 0.08, 0.9 + Math.sin(time * 13) * 0.12, 1 + Math.cos(time * 12) * 0.08);
+                outerFlames.forEach((tongue, index) => {
+                  tongue.rotation.z = (index - 1) * 0.18 + Math.sin(time * 8 + index) * 0.12;
+                });
+                fireLight.intensity = 1.8 + Math.sin(time * 7) * 0.35 + Math.cos(time * 11) * 0.18;
             }
         });
     });
@@ -6503,6 +7055,7 @@
           stp = kind === 'van' ? pm2(0x6e9fb0) : pl,
           y0 = 0.35,
           top = y0 + o.h,
+          zFront = o.cz + o.cl / 2,
           L2 = o.l / 2,
           W2 = o.w / 2;
         box(o.w * 0.98, 0.12, 0.1, dk, 0, y0 + 0.1, L2 + 0.04, g);
@@ -6515,7 +7068,16 @@
           box(0.03, 0.04, 0.14, ch, s * (W2 + 0.012), y0 + o.h * 0.78, o.cz + 0.12, g);
           box(0.12, 0.1, 0.08, b, s * (W2 + 0.06), top + 0.12, o.cz + o.cl * 0.5 - 0.1, g);
           box(0.02, 0.07, o.l * 0.96, stp, s * (W2 + 0.008), y0 + o.h * 0.38, 0, g);
+          const mirrorArm = cyl(0.018, 0.018, 0.2, dk, s * (W2 + 0.09), top + o.ch * 0.67, zFront - 0.04, g, 0, s * 0.8);
+          mirrorArm.rotation.z = s * -0.18;
+          box(0.13, 0.09, 0.045, dk, s * (W2 + 0.16), top + o.ch * 0.69, zFront + 0.01, g);
+          box(0.08, 0.055, 0.012, glassM, s * (W2 + 0.16), top + o.ch * 0.69, zFront + 0.036, g);
+          box(0.16, 0.035, 0.025, dk, s * (W2 + 0.018), top + o.ch * 0.27, o.cz + 0.05, g);
         }
+        // ป้ายทะเบียนและกันชนแบบแยกชิ้นช่วยให้เห็นสัดส่วนด้านหน้า/ท้ายชัดขึ้น
+        box(o.w * 0.72, 0.12, 0.08, dk, 0, y0 + 0.1, L2 + 0.045, g);
+        box(0.34, 0.09, 0.018, pm2(0xf5f2e8), 0, y0 + 0.13, L2 + 0.09, g);
+        box(0.34, 0.09, 0.018, pm2(0xf5f2e8), 0, y0 + 0.13, -L2 - 0.09, g);
         W.forEach(w => {
           const sd = Math.sign(w.position.x),
             r = new THREE.Mesh(new THREE.TorusGeometry(0.27, 0.025, 6, 16), ch);
@@ -6547,7 +7109,8 @@
         sedan: 3, pickup: 3.4, van: 3.3, bike: 1.9, bicycle: 1.8,
         tractor: 6.2, pickuptrailer: 6.6, tow: 5.4, schoolbus: 5.5, bus: 7.5, tuktuk: 2.2,
         sportscar: 3.1, suv: 3.5, camper: 4.5, hatchback: 2.8, delivery: 4.2,
-        classic: 3.3, ev_commuter: 2.9, police: 3.0, ambulance: 3.8, minitruck: 2.8
+        classic: 3.3, ev_commuter: 2.9, police: 3.0, ambulance: 3.8, minitruck: 2.8,
+        phumphuang: 4.6, etaen: 4.1
       },
       CK = {
         bicycle: ['กริ๊ง กริ๊ง ' + svgInline('car'), 'ปั่นเล่นสบาย ๆ จ้า'],
@@ -6722,18 +7285,68 @@
           wheelG(0.3, 0.15, s * 0.6, 0.3, 1.2, g, W); // ล้อหน้าเล็ก
           wheelG(0.4, 0.2, s * 0.7, 0.4, -1.2, g, W); // ล้อหลังใหญ่
         }
-        // เครื่องยนต์เปลือยด้านหน้า (สายพานหมุน)
-        box(0.5, 0.4, 0.7, engineM, 0, 0.7, 1.1, g);
-        cyl(0.2, 0.2, 0.1, metal, 0.3, 0.7, 1.2, g, 0, Math.PI/2); // ล้อตุนกำลัง
-        // พวงมาลัยยาวและที่นั่งไม้
-        cyl(0.02, 0.02, 1.2, metal, 0, 0.9, 0.5, g, -0.4, 0);
-        box(1.2, 0.05, 0.6, wood, 0, 0.7, 0, g);
+        // กระบะไม้ตีซี่ มีคานรองและแผงกั้นท้าย
+        const strawBase = pm2(0x9b713b),
+          strawMats = [0xc2a15b, 0xd2b66f, 0xb38a45, 0xd8c17a].map(pm2),
+          twineM = pm2(0x78603a),
+          chrome = pm2(0xb7b9ad),
+          dark = pm2(0x303638);
+        box(1.55, 0.12, 1.82, wood, 0, 0.53, -1.08, g);
+        for (const s of [-1, 1]) {
+          box(0.08, 0.42, 1.86, wood, s * 0.77, 0.78, -1.08, g);
+          box(0.08, 0.42, 0.08, strawBase, s * 0.77, 0.78, -0.18, g);
+          for (let i = 0; i < 4; i++) {
+            box(0.06, 0.025, 1.65, strawBase, s * (0.25 + i * 0.17), 0.61, -1.08, g);
+          }
+        }
+        box(1.55, 0.42, 0.08, wood, 0, 0.78, -2.0, g);
+        for (let i = 0; i < 4; i++) box(1.48, 0.035, 0.045, strawBase, 0, 0.63 + i * 0.1, -2.05, g);
+
+        // มัดฟางหยาบทรงไม่สมบูรณ์ วางสลับชั้นและรัดเชือกแทนก้อนเหลี่ยมเดียว
+        const bales = [
+          [-0.36, 0.92, -0.62, 0.38, 0.27, 0.46],
+          [0.36, 0.92, -0.62, 0.38, 0.27, 0.46],
+          [-0.36, 0.92, -1.48, 0.38, 0.27, 0.42],
+          [0.36, 0.92, -1.48, 0.38, 0.27, 0.42],
+          [-0.24, 1.47, -1.02, 0.34, 0.25, 0.48],
+          [0.24, 1.47, -1.02, 0.34, 0.25, 0.48]
+        ];
+        for (const [bx, by, bz, sx, sy, sz] of bales) {
+          const bale = new THREE.Mesh(new THREE.DodecahedronGeometry(0.58, 0), strawMats[Math.floor(Math.random() * strawMats.length)]);
+          bale.position.set(bx, by, bz);
+          bale.scale.set(sx / 0.58, sy / 0.58, sz / 0.58);
+          bale.rotation.y = (Math.random() - 0.5) * 0.16;
+          bale.castShadow = true;
+          bale.receiveShadow = true;
+          g.add(bale);
+          for (const tx of [-0.18, 0.18]) {
+            box(0.025, sy * 1.82, 0.035, twineM, bx + tx, by, bz, g);
+            box(sx * 1.72, 0.025, 0.035, twineM, bx, by + sy * 0.88, bz, g);
+          }
+        }
+
+        // เครื่องยนต์สูบเดียวพร้อมถังน้ำมัน อุปกรณ์บังคับ และท่อไอเสีย
+        box(0.54, 0.42, 0.72, engineM, 0, 0.69, 1.08, g);
+        cyl(0.19, 0.22, 0.12, metal, 0.32, 0.69, 1.1, g, 0, Math.PI / 2);
+        cyl(0.025, 0.025, 0.42, chrome, 0.32, 0.69, 1.1, g, 0, Math.PI / 2);
+        cyl(0.055, 0.07, 0.34, metal, 0.3, 0.95, 1.08, g, 0.35, 0);
+        cyl(0.045, 0.035, 0.72, chrome, 0.48, 0.58, 0.82, g, Math.PI / 2, 0.15);
+        // เบาะคนขับและพวงมาลัยแบบรถไถเดินตาม
+        box(0.48, 0.08, 0.42, dark, 0, 0.91, 0.08, g);
+        cyl(0.025, 0.028, 0.72, metal, 0, 1.02, 0.47, g, -0.38, 0);
+        cyl(0.025, 0.025, 0.5, chrome, 0, 1.35, 0.61, g, 0, Math.PI / 2);
         rider(g, 0, 0.7, 0, 1, true, true);
-        // กระบะไม้ด้านหลังบรรทุกฟาง
-        box(1.6, 0.1, 1.8, wood, 0, 0.5, -1.1, g);
-        box(1.6, 0.4, 0.05, wood, 0, 0.7, -1.95, g);
-        box(1.4, 0.8, 1.6, pm2(0xddcc66), 0, 0.9, -1.1, g); // กองฟาง
-        ball(0.1, lampM, 0, 0.9, 1.5, g); // ไฟหน้าดวงเดียว
+
+        // บังโคลน ล้อหลัง และไฟ/ป้ายสะท้อนแสง
+        for (const s of [-1, 1]) {
+          const mudguard = box(0.12, 0.08, 0.9, wood, s * 0.72, 0.74, -1.2, g);
+          mudguard.rotation.x = -0.08;
+          box(0.16, 0.09, 0.05, lampM, s * 0.42, 0.72, 1.55, g);
+          box(0.12, 0.11, 0.05, tailM, s * 0.55, 0.55, -1.94, g);
+          box(0.16, 0.08, 0.025, pm2(0xf1df9b), s * 0.55, 0.42, -1.99, g);
+        }
+        box(0.32, 0.18, 0.06, pm2(0xf4eee0), 0, 0.44, -2.01, g);
+        ball(0.1, lampM, 0, 0.93, 1.49, g); // ไฟหน้ารถ
         g.userData.w = W;
         return g;
       },
@@ -7426,6 +8039,8 @@
       // 🚀 นำ currentBoost มาคูณเพื่อให้รถคันอื่นถูกแซงและถอยหลังไวขึ้น
       const actualPlayerWorldSp = rawPlayerWorldSp * currentBrake * currentBoost; 
       const baseTrafficWorldSp = Math.max(rawPlayerWorldSp * 1.15, 1.35 + Math.sqrt(speedMul) * 0.28);
+      const schoolCrossingActive = !state.night && !!window._schoolCrossingActive,
+        schoolCrossingS = sFromT(window._schoolCrossingT || T_SCHOOL_FIELD);
       // --- 1. ตัวควบคุมจังหวะรถ (นับเวลาเฉพาะตอนถนนโล่ง ไม่มีรถสวนอยู่ข้างหน้า) ---
       if (mv > 0) {
         const activeOncoming = traffic.filter(c => c.active && !c.sameLane);
@@ -7537,6 +8152,19 @@
           }
         }
 
+        c.schoolStopped = false;
+        if (schoolCrossingActive) {
+          const carS = ((sPlayer + sg * c.distM) % TOTAL_ROUTE_LEN + TOTAL_ROUTE_LEN) % TOTAL_ROUTE_LEN,
+            travelSign = c.sameLane ? sg : -sg,
+            distToCrossing = ((schoolCrossingS - carS) * travelSign % TOTAL_ROUTE_LEN + TOTAL_ROUTE_LEN) % TOTAL_ROUTE_LEN,
+            stopBuffer = 8 + c.len * 0.5;
+          if (distToCrossing > 0 && distToCrossing < stopBuffer + 36) {
+            const remaining = Math.max(0, distToCrossing - stopBuffer);
+            carWorldSp = Math.min(carWorldSp, Math.sqrt(2 * 2.8 * remaining));
+            c.schoolStopped = remaining < 0.12;
+          }
+        }
+
         c.worldSp = carWorldSp;
         const deltaM = c.sameLane
           ? (carWorldSp - actualPlayerWorldSp)
@@ -7599,7 +8227,9 @@
             dx * dx + dz * dz < 30 &&
             say(
               c,
-              (CK[c.kind] || CT)[Math.floor(Math.random() * (CK[c.kind] || CT).length)],
+              Math.random() < 0.75
+                ? nextEncouragement()
+                : (CK[c.kind] || CT)[Math.floor(Math.random() * (CK[c.kind] || CT).length)],
               c.kind === 'tractor' || c.kind === 'tow' ? 3 : c.kind === 'bike' || c.kind === 'bicycle' ? 2.2 : 1.9,
               3.2
             )
@@ -7640,6 +8270,9 @@
           if (d < -7.5) {
             window._ovtState = 'returning';
           }
+        } else if (window._ovtState === 'returning') {
+          // รอให้รถกลับเข้ากึ่งกลางเลนก่อน ไม่เริ่มแซงคันถัดไปซ้อนกลางจังหวะเปลี่ยนเลน
+          if (Math.abs(window._ovt || 0) < 0.12) window._ovtState = 'idle';
         } else {
           // ยังไม่ได้เริ่มแซง
           if (d > 0 && d < 34) {
@@ -7670,8 +8303,8 @@
       if (window._ovtState === 'passing') {
         // เบี่ยงออกเลนสวนเต็มตัว (2.15 เท่าของ LANE)
         targetOvt = LANE * 2.15;
-        // เร่งแซง 2.2 เท่า และให้บูสต์ขึ้นไวพอสำหรับแซงในระยะสั้น
-        targetBoost = 2.2;
+        // เพิ่มกำลังแซงอย่างชัดเจน แต่ไม่กระชากความเร็วและกล้อง
+        targetBoost = 1.48;
         targetBrake = 1.0;
       } else if (window._ovtState === 'following' && frontSame) {
         // อยู่ในเลนเดิม รอจังหวะแซง
@@ -7692,7 +8325,7 @@
       } else if (window._ovtState === 'returning') {
         // แซงพ้นแล้ว เบี่ยงรถกลับเข้าเลนเดิมอย่างนุ่มนวล
         targetOvt = 0.0;
-        targetBoost = 1.12; // รักษาระดับความเร็วตอนตบเข้าเลน
+        targetBoost = 1.08; // คงแรงส่งเล็กน้อยระหว่างกลับเข้าเลน
         targetBrake = 1.0;
         if (window._ovt < 0.12) {
           window._ovtState = 'idle';
@@ -7705,12 +8338,21 @@
       }
 
       window._playerBrake += (targetBrake - window._playerBrake) * Math.min(1, dt * 3.2);
-      window._playerBoost += (targetBoost - window._playerBoost) * Math.min(1, dt * 6);
+      window._playerBoost += (targetBoost - window._playerBoost) * Math.min(1, dt * 2.6);
 
-      const prevOvt = window._ovt || 0;
-      window._ovt = prevOvt + (targetOvt - prevOvt) * Math.min(1, dt * 2.4);
-      // คำนวณความเร็วการเอียงตัวรถตอนหักเลี้ยวเปลี่ยนเลน
-      window._ovtTilt = (window._ovt - prevOvt) / Math.max(0.001, dt);
+      const prevOvt = window._ovt || 0,
+        prevOvtVelocity = window._ovtVelocity || 0,
+        ovtError = targetOvt - prevOvt,
+        desiredOvtVelocity = Math.max(-3.2, Math.min(3.2, ovtError * 2.2));
+      let nextOvtVelocity = prevOvtVelocity + (desiredOvtVelocity - prevOvtVelocity) * Math.min(1, dt * 4.5),
+        nextOvt = prevOvt + nextOvtVelocity * dt;
+      if (ovtError === 0 || (targetOvt - nextOvt) * ovtError <= 0) {
+        nextOvt = targetOvt;
+        nextOvtVelocity = 0;
+      }
+      window._ovt = nextOvt;
+      window._ovtVelocity = nextOvtVelocity;
+      window._ovtTilt = nextOvtVelocity;
     }
 
     /* ============================================================================
@@ -9018,7 +9660,73 @@
         ['ผลไม้สด ๆ ค่ะ แวะชิมก่อน!', 'ส้มโอหวานฉ่ำเลยนะคะ', 'ซื้อกลับบ้านนะคะ'],
         ['ลูกชิ้นปิ้งร้อน ๆ จ้าเด็ก ๆ!', 'ไอติมเย็นชื่นใจ แวะก่อนจ้า!', 'น้ำปั่นหวานเย็นหน้าโรงเรียนจ้า']
       ),
+      encouragementQuotes = [
+        'ค่อย ๆ ไปก็ถึงได้เหมือนกันนะ',
+        'วันนี้ทำได้เท่านี้ ก็ถือว่าเก่งแล้ว',
+        'พักหายใจสักนิด แล้วค่อยไปต่อ',
+        'ทางไกลเริ่มจากก้าวเล็ก ๆ เสมอ',
+        'ไม่ต้องรีบ แค่ไม่ทิ้งตัวเองก็พอ',
+        'เมฆครึ้มไม่ได้อยู่กับเราตลอดไป',
+        'วันที่เหนื่อย ไม่ได้แปลว่าเราอ่อนแอ',
+        'ขอให้ใจดีกับตัวเองเหมือนที่ใจดีกับคนอื่น',
+        'ช้าได้ แต่อย่าลืมว่าเรากำลังเดินหน้า',
+        'ทุกเช้ามีโอกาสให้เริ่มต้นใหม่',
+        'เรื่องยากวันนี้ อาจเบาลงเมื่อเราได้พัก',
+        'แค่ยังพยายามอยู่ ก็มีความหมายมากแล้ว',
+        'ไม่เป็นไรถ้าวันนี้ยังไปไม่ถึงปลายทาง',
+        'มองทางข้างหน้า แล้วค่อย ๆ ขับไปนะ',
+        'ความพยายามเงียบ ๆ ก็พาเราไปได้ไกล',
+        'ให้เวลากับตัวเอง เติบโตในจังหวะของเรา',
+        'วันที่ธรรมดาก็มีเรื่องดีซ่อนอยู่',
+        'เหนื่อยก็พัก ไม่จำเป็นต้องยอมแพ้',
+        'ขอให้ระหว่างทางมีเรื่องเล็ก ๆ ให้ยิ้มได้',
+        'เราไม่จำเป็นต้องเก่งทุกวัน',
+        'ผ่านมาถึงตรงนี้ได้ ก็เก่งมากแล้ว',
+        'จุดหมายสำคัญ แต่ความปลอดภัยสำคัญกว่า',
+        'วันนี้อาจไม่ง่าย แต่คุณไม่จำเป็นต้องสู้ลำพัง',
+        'ทุกโค้งมีทางออก ค่อย ๆ มองไปนะ',
+        'ความหวังเล็ก ๆ ก็เป็นแสงนำทางได้',
+        'อย่าเปรียบเทียบเส้นทางของเรากับใคร',
+        'บางครั้งการหยุดพัก ก็คือการดูแลตัวเอง',
+        'ทำทีละอย่าง ใจก็เบาลงได้',
+        'พรุ่งนี้ยังมีโอกาสให้ลองใหม่เสมอ',
+        'ขอให้วันนี้ใจเบากว่าเมื่อวานสักนิด',
+        'เราเติบโตได้ แม้ในวันที่ไม่สมบูรณ์แบบ',
+        'สิ่งดี ๆ บางอย่างต้องใช้เวลาเดินทาง',
+        'อย่าลืมชื่นชมตัวเองที่ยังพยายาม',
+        'ถนนยังทอดยาว และเรื่องดี ๆ ยังรออยู่',
+        'ยิ้มให้ตัวเองสักครั้ง คุณสมควรได้รับมัน',
+        'ไม่ต้องมีคำตอบทุกอย่างในวันนี้ก็ได้',
+        'ก้าวเล็ก ๆ ที่ทำต่อเนื่อง พาไปได้ไกล',
+        'หัวใจที่เหนื่อย ต้องการความอ่อนโยน',
+        'ขอให้เจอผู้คนที่ทำให้วันนี้อบอุ่นขึ้น',
+        'พลาดได้ เรียนรู้ได้ แล้วเริ่มใหม่ได้',
+        'อย่าลืมว่าคุณมีคุณค่า แม้วันที่รู้สึกไม่ไหว',
+        'ถึงช้ากว่าแผน ก็ยังถึงได้อย่างปลอดภัย',
+        'เก็บแรงไว้ให้สิ่งที่สำคัญกับใจนะ',
+        'ทุกวันไม่ต้องสดใส แค่ผ่านไปอย่างอ่อนโยนก็พอ',
+        'ขอให้ปลายทางของวันนี้มีความสบายใจรออยู่',
+        'คุณทำดีที่สุดแล้วในแบบของวันนี้'
+      ],
+      encouragementDeck = [],
       CT = ['ปี๊น ปี๊น ' + svgInline('wave'), 'สวัสดีครับ!', 'ขับปลอดภัยนะ', 'ทางนี้ชิลล์มาก ๆ'];
+    let lastEncouragement = '';
+    function nextEncouragement() {
+      if (!encouragementDeck.length) {
+        encouragementDeck.push(...encouragementQuotes);
+        for (let i = encouragementDeck.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [encouragementDeck[i], encouragementDeck[j]] = [encouragementDeck[j], encouragementDeck[i]];
+        }
+        if (encouragementDeck.length > 1 && encouragementDeck[encouragementDeck.length - 1] === lastEncouragement) {
+          const swapIndex = encouragementDeck.findIndex((quote, i) => i < encouragementDeck.length - 1 && quote !== lastEncouragement);
+          [encouragementDeck[swapIndex], encouragementDeck[encouragementDeck.length - 1]] =
+            [encouragementDeck[encouragementDeck.length - 1], encouragementDeck[swapIndex]];
+        }
+      }
+      lastEncouragement = encouragementDeck.pop();
+      return lastEncouragement;
+    }
     for (let i = 0; i < 5; i++) {
       const e = document.createElement('div');
       e.className = 'talk';
@@ -9288,9 +9996,9 @@
       const level = state.qualityMode === 'auto' ? qualityLevel : parseInt(state.qualityMode),
         ratio = devicePixelRatio || 1;
       
-      // สเกล 5 ระดับ: 0(ต่ำมาก), 1(ต่ำ), 2(ปานกลาง), 3(สูง), 4(สูงมาก) — จำกัดเพดาน PixelRatio ไม่ให้พุ่งระดับ 4K จนกิน GPU
+      // จำกัด PixelRatio สูงสุดเพื่อไม่ให้จอ HiDPI เพิ่มภาระ GPU โดยไม่จำเป็น
       const rMuls = coarsePointer ? [0.4, 0.6, 0.75, 0.9, 1.0] : [0.5, 0.75, 0.9, 1.0, 1.0];
-      const rCaps = coarsePointer ? [0.6, 0.8, 0.95, 1.1, 1.25] : [0.75, 0.95, 1.05, 1.15, 1.25];
+      const rCaps = coarsePointer ? [0.6, 0.8, 0.95, 1.0, 1.0] : [0.75, 0.95, 1.05, 1.1, 1.1];
       renderer.setPixelRatio(Math.min(ratio * rMuls[level], rCaps[level]));
       
       renderer.setSize(w, h);
@@ -9299,19 +10007,24 @@
     }
     function qualityInfo() {
       const names = ['ต่ำมาก', 'ต่ำ', 'ปานกลาง', 'สูง', 'สูงมาก'];
-      const level = state.qualityMode === 'auto' ? qualityLevel : parseInt(state.qualityMode);
+      const requestedLevel = state.qualityMode === 'auto' ? qualityLevel : parseInt(state.qualityMode);
+      const hotspotCap = performanceHotspotLabel === 'งานวัด' ? 0 : 1;
+      const level = nearPerformanceHotspot ? Math.min(requestedLevel, hotspotCap) : requestedLevel;
       if ($('qualityInfo')) {
-        $('qualityInfo').textContent = state.qualityMode === 'auto' 
-          ? '(ประเมินได้ระดับ: ' + names[level] + ')' 
-          : '(บังคับใช้: ' + names[level] + ')';
+        const mode = state.qualityMode === 'auto' ? 'อัตโนมัติ' : 'กำหนดเอง';
+        $('qualityInfo').textContent = nearPerformanceHotspot
+          ? `(${mode}: ลดชั่วคราวใกล้${performanceHotspotLabel} · ${names[level]} · เงาปิด)`
+          : `(${mode}: ${names[level]} · เงา${level >= 3 ? 'เปิด' : 'ปิด'})`;
       }
     }
     function applyQuality() {
-      const level = state.qualityMode === 'auto' ? qualityLevel : parseInt(state.qualityMode);
+      const requestedLevel = state.qualityMode === 'auto' ? qualityLevel : parseInt(state.qualityMode);
+      const hotspotCap = performanceHotspotLabel === 'งานวัด' ? 0 : 1;
+      const level = nearPerformanceHotspot ? Math.min(requestedLevel, hotspotCap) : requestedLevel;
       if (level !== activeQuality) {
-        // เงาเปิดเฉพาะโหมด สูง(3) และ สูงมาก(4) เท่านั้น และล็อกขนาด Shadow Map ที่ 1024 เพื่อไม่ให้กระตุกตอนปรับขึ้นระดับ 4
-        const shadows = level >= 3; 
-        const size = level >= 3 ? (coarsePointer ? 512 : 1024) : 512;
+        const shadows = level >= 3;
+        const shadowSizes = coarsePointer ? [512, 512, 512, 512, 512] : [512, 512, 512, 1024, 1024];
+        const size = shadowSizes[level];
         if (sunLight.shadow.map) {
           sunLight.shadow.map.dispose();
           sunLight.shadow.map = null;
@@ -9325,6 +10038,14 @@
       }
       qualityInfo();
     }
+    function applyVisualMode() {
+      const filters = {
+        natural: 'none',
+        vivid: 'saturate(1.28) contrast(1.06) brightness(1.03)',
+        game: 'saturate(1.48) contrast(1.1) brightness(1.04)'
+      };
+      renderer.domElement.style.filter = filters[state.visualMode] || filters.natural;
+    }
     function samplePerformance(frameMs) {
       if (state.qualityMode !== 'auto') return;
       qualitySampleMs += frameMs;
@@ -9333,11 +10054,11 @@
       if (qualitySampleMs < 2500) return;
       
       const avg = qualityFrameMs / Math.max(1, qualityFrames);
-      // avg > 22 ms คือเริ่มกระตุก (ต่ำกว่า ~45 FPS), avg < 16.5 ms คือลื่น (ทะลุ ~60 FPS)
-      if (avg > 22) {
+      // ลดเมื่อช้ากว่า ~30 FPS และเพิ่มเมื่อเร็วกว่า ~42 FPS เพื่อกันการสลับระดับไปมา
+      if (avg > 33) {
         qualitySlowMs += qualitySampleMs;
         qualityStableMs = 0;
-      } else if (avg < 16.5) {
+      } else if (avg < 24) {
         qualityStableMs += qualitySampleMs;
         qualitySlowMs = 0;
       } else {
@@ -9594,10 +10315,18 @@
         qualitySampleMs = qualityFrameMs = qualityFrames = qualitySlowMs = qualityStableMs = 0;
         applyQuality();
       },
+      setVisualMode: applyVisualMode,
+      gpuInfo: () => {
+        const gl = renderer.getContext(),
+          debugInfo = gl.getExtension('WEBGL_debug_renderer_info'),
+          name = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : '';
+        return name ? `Renderer ที่เบราว์เซอร์รายงาน: ${name}` : 'เบราว์เซอร์ไม่เปิดเผยชื่อ GPU';
+      },
       qualityInfo
     };
     new ResizeObserver(resize).observe(host);
     applyQuality();
+    applyVisualMode();
     resize();
     theme();
     refreshBoxes();
@@ -9777,10 +10506,9 @@
       bz.position.set(gx, 0.995, 0.49);
       bz.rotation.x = Math.PI / 2;
       cock.add(bz);
-      const fc = new THREE.Mesh(new THREE.CylinderGeometry(gr, gr, 0.02, 24), gMat);
-      fc.position.set(gx, 0.995, 0.488);
-      fc.rotation.x = Math.PI / 2;
-      fc.rotation.y = Math.PI / 2;
+      const fc = new THREE.Mesh(new THREE.CircleGeometry(gr, 48), gMat);
+      fc.position.set(gx, 0.995, 0.479);
+      fc.rotation.y = Math.PI;
       cock.add(fc);
       const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.025, 14), chromeTrimM);
       cap.position.set(gx, 0.995, 0.485);
@@ -10232,6 +10960,7 @@
       lampM.emissiveIntensity = 0.6 + nl * 2.5; // เพิ่มความสว่างดวงไฟหน้ารถสวน
       tailM.emissiveIntensity = 0.4 + nl * 1.8; // เพิ่มความสว่างดวงไฟท้ายรถสวน
       fireflies();
+      roadsideWildlife();
       dandelions(dt);
       headL.intensity = 18 * nl;
       // แอนิเมชันดาวตก
@@ -10351,7 +11080,7 @@
         const actualSpeed = typeof speedMul !== 'undefined'
           ? (window._schoolCrossingStopped ? 0 : speedMul * (window._playerBrake !== undefined ? window._playerBrake : 1) * (window._playerBoost !== undefined ? window._playerBoost : 1))
           : 0;
-        const targetNeedleAngle = 2.15 - Math.min(actualSpeed / 28, 1) * 3.8 + Math.sin(totalTime * 5.2) * 0.012;
+        const targetNeedleAngle = -2.15 + Math.min(actualSpeed / 28, 1) * 3.8 + Math.sin(totalTime * 5.2) * 0.012;
         window.speedNeedleG.rotation.z += (targetNeedleAngle - window.speedNeedleG.rotation.z) * Math.min(1, dt * 4.5);
       }
 
@@ -10550,32 +11279,30 @@
       <div class="rmap-box" role="dialog" aria-modal="true" aria-label="แผนที่เส้นทางและการวาร์ป">
         <div class="rmap-head">
           <div>
-            <h3>${svgIcon('map')} แผนที่เส้นทาง 2.5D</h3>
-            <p>แตะบนถนนเพื่อวาร์ป · ลากเพื่อเลื่อน · ใช้ล้อเมาส์หรือปุ่มเพื่อซูม</p>
+            <h3>${svgIcon('map')} แผนที่การเดินทาง</h3>
+            <p class="rmap-current" id="rmapCurrent">ตำแหน่งรถ · กำลังเตรียมแผนที่</p>
           </div>
           <div class="rmap-actions">
+            <button type="button" class="rmap-view-btn" id="rmapLocateBtn">${svgIcon('pin')} ตำแหน่งรถ</button>
             <div class="rmap-zoom" role="group" aria-label="ควบคุมการซูมแผนที่">
               <button type="button" class="rmap-zoom-btn" data-map-zoom="out" aria-label="ซูมออก">−</button>
               <span class="rmap-zoom-level" aria-live="polite">100%</span>
               <button type="button" class="rmap-zoom-btn" data-map-zoom="in" aria-label="ซูมเข้า">+</button>
-              <button type="button" class="rmap-zoom-reset">รีเซ็ต</button>
+              <button type="button" class="rmap-zoom-reset">ทั้งเส้นทาง</button>
             </div>
             <button type="button" class="rmap-close" id="rmapCloseBtn">ปิดแผนที่ ✕</button>
           </div>
         </div>
         <canvas width="1000" height="750"></canvas>
+        <p class="rmap-hint">${svgIcon('pin')} แตะถนนเพื่อย้ายรถ · ลากเพื่อเลื่อน · ใช้ล้อเมาส์หรือปุ่มเพื่อซูม</p>
         <div class="rmap-legend">
-          <span><i class="lg-dot" style="background:#376951"></i><b>เส้นทางหลัก:</b> จันจว้า → เวียงแก่น (135 กม.)</span>
-          <span><i class="lg-dot" style="background:#b27b4f"></i><b>เส้นทางต่อ:</b> เวียงแก่น → ดอยผาตั้ง → ภูชี้ฟ้า (รวม 200 กม.)</span>
-          <span><i class="lg-dot" style="background:#ffffff;border-color:#95a89b"></i><b>เส้นประ:</b> เส้นทางวนกลับในชนบท</span>
-          <span>${svgIcon('boat')}<b>แม่น้ำ & ท่าเรือ</b></span>
-          <span>${svgIcon('store')}<b>7-11</b></span>
-          <span>${svgIcon('school')}<b>โรงเรียน</b></span>
-          <span>${svgIcon('temple')}<b>วัด</b></span>
-          <span>${svgIcon('bridge')}<b>สะพาน</b></span>
-          <span>${svgIcon('tree')}<b>อุโมงค์ต้นไม้</b></span>
-          <span>${svgIcon('tent')}<b>จุดกางเต็นท์</b></span>
-          <span>${svgIcon('box')}<b>กล่องความทรงจำ</b></span>
+          <span><i class="lg-line" style="--map-color:#376951"></i>เส้นทางหลัก · 0–135 กม.</span>
+          <span><i class="lg-line" style="--map-color:#b27b4f"></i>เส้นทางขึ้นดอย · 135–200 กม.</span>
+          <span><i class="lg-line lg-village"></i>ชุมชนชนบท · 136–169 กม.</span>
+          <span>${svgIcon('boat')}แม่น้ำ</span>
+          <span>${svgIcon('school')}โรงเรียน</span>
+          <span>${svgIcon('temple')}วัด</span>
+          <span>${svgIcon('tent')}จุดแวะ</span>
         </div>
       </div>
     `;
@@ -10587,6 +11314,7 @@
       MH = 750;
     const mapView = { scale: 1, x: 0, y: 0 };
     const mapZoomLevel = rmap.querySelector('.rmap-zoom-level');
+    const mapCurrent = rmap.querySelector('#rmapCurrent');
 
     function clampMapView() {
       mapView.x = Math.min(0, Math.max(MW * (1 - mapView.scale), mapView.x));
@@ -10607,9 +11335,21 @@
       drawMini(true);
     }
 
+    function focusMapAt(x, z, scale = 1.8) {
+      if (!mapBox) buildMapBase();
+      const [px, py] = mproj(x, z);
+      mapView.scale = Math.min(3.5, Math.max(1, scale));
+      mapView.x = MW / 2 - px * mapView.scale;
+      mapView.y = MH / 2 - py * mapView.scale;
+      clampMapView();
+      mapZoomLevel.textContent = `${Math.round(mapView.scale * 100)}%`;
+      drawMini(true);
+    }
+
     rmap.querySelector('[data-map-zoom="in"]').addEventListener('click', () => setMapZoom(mapView.scale * 1.25));
     rmap.querySelector('[data-map-zoom="out"]').addEventListener('click', () => setMapZoom(mapView.scale / 1.25));
     rmap.querySelector('.rmap-zoom-reset').addEventListener('click', () => setMapZoom(1));
+    rmap.querySelector('#rmapLocateBtn').addEventListener('click', () => focusMapAt(car.position.x, car.position.z));
     mapCanvas.addEventListener('wheel', e => {
       e.preventDefault();
       setMapZoom(mapView.scale * (e.deltaY < 0 ? 1.15 : 1 / 1.15), e.clientX, e.clientY);
@@ -10620,7 +11360,10 @@
       rmap.classList.toggle('off', isOff);
       $('mapBtn').classList.toggle('active', !isOff);
       $('mapBtn').setAttribute('aria-pressed', String(!isOff));
-      if (!isOff) drawMini(true);
+      if (!isOff) {
+        fabSet(false);
+        drawMini(true);
+      }
     }
 
     $('mapBtn').onclick = () => toggleFullMap();
@@ -10651,15 +11394,15 @@
     // ตำแหน่งสถานที่พิเศษทั้งหมดในฉาก
     const SPECIAL_PLACES = [
       // โซนเกษตรกรรมและธรรมชาติ
-      { t: 0.61, label: 'โซนทุ่งนาขั้นบันได', color: '#6b9863', type: 'zone' },
-      { t: 0.705, label: 'โซนไร่ข้าวโพด', color: '#d9a05b', type: 'zone' },
-      { t: 0.755, label: 'แม่น้ำสายกว้าง & เรือหางยาว', color: '#2b7ea6', type: 'zone' },
-      { t: 0.805, label: 'โซนสวนผลไม้', color: '#e98f7d', type: 'zone' },
-      { t: 0.90, label: 'โซนสวนมะพร้าว', color: '#4f8bb0', type: 'zone' },
+      { t: 0.61, label: 'ทุ่งนา', color: '#6b9863', type: 'zone' },
+      { t: 0.705, label: 'ไร่ข้าวโพด', color: '#d9a05b', type: 'zone' },
+      { t: 0.755, label: 'แม่น้ำ', color: '#2b7ea6', type: 'zone' },
+      { t: 0.805, label: 'สวนผลไม้', color: '#e98f7d', type: 'zone' },
+      { t: 0.90, label: 'สวนมะพร้าว', color: '#4f8bb0', type: 'zone' },
       // ท่าเรือริมแม่น้ำ
-      { t: 0.755, label: 'ท่าเรือแม่น้ำ', color: '#2b7ea6', type: 'poi' },
+      { t: 0.755, label: 'ท่าเรือ', color: '#2b7ea6', type: 'poi' },
       // หนองน้ำสวนมะพร้าว & ยอยักษ์
-      { t: 0.885, label: 'หนองน้ำสวนมะพร้าว & ยอยักษ์', color: '#0284c7', type: 'poi' },
+      { t: 0.885, label: 'หนองน้ำ & ยอยักษ์', color: '#0284c7', type: 'poi' },
       // 7-Eleven (เหลือเฉพาะสาขาต้นทาง — เอาสาขาแถวหนองน้ำออก)
       { t: 0.016, label: '7-11', color: '#1f7a4d', type: 'poi' },
       // โรงเรียน
@@ -10698,54 +11441,81 @@
       cv.height = MH;
       const c = cv.getContext('2d');
 
-      // พื้นภูมิประเทศไล่เฉดและลายชั้นความสูง
-      const terrain = c.createLinearGradient(0, 0, MW, MH);
-      terrain.addColorStop(0, '#dcebd0');
-      terrain.addColorStop(0.52, '#edf0d8');
-      terrain.addColorStop(1, '#c7dfc7');
+      // พื้นแผนที่โทน atlas พร้อมแสงเฉียงและขอบมืดอ่อนๆ
+      const terrain = c.createRadialGradient(MW * 0.42, MH * 0.35, 40, MW * 0.5, MH * 0.5, MW * 0.76);
+      terrain.addColorStop(0, '#f4f4df');
+      terrain.addColorStop(0.58, '#e5edcf');
+      terrain.addColorStop(1, '#c6d9c3');
       c.fillStyle = terrain;
       c.fillRect(0, 0, MW, MH);
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 13; i++) {
         c.beginPath();
-        c.ellipse(510 + Math.sin(i * 1.7) * 180, 370 + Math.cos(i * 1.2) * 145,
-          110 + i * 32, 54 + i * 17, -0.28, 0, Math.PI * 2);
-        c.strokeStyle = `rgba(94, 133, 87, ${0.025 + (i % 3) * 0.008})`;
-        c.lineWidth = 2;
+        c.ellipse(
+          500 + Math.sin(i * 1.7) * 210,
+          365 + Math.cos(i * 1.2) * 165,
+          105 + i * 29,
+          56 + i * 16,
+          -0.28,
+          0,
+          Math.PI * 2
+        );
+        c.strokeStyle = `rgba(103, 133, 79, ${0.035 + (i % 3) * 0.012})`;
+        c.lineWidth = i % 4 === 0 ? 2 : 1;
         c.stroke();
-      }
-      c.strokeStyle = 'rgba(55, 105, 81, 0.06)';
-      c.lineWidth = 1;
-      for (let gx = 0; gx < MW; gx += 50) {
-        c.beginPath(); c.moveTo(gx, 0); c.lineTo(gx, MH); c.stroke();
-      }
-      for (let gy = 0; gy < MH; gy += 50) {
-        c.beginPath(); c.moveTo(0, gy); c.lineTo(MW, gy); c.stroke();
       }
 
-      // วาดภูเขาประดับแผนที่
-      HILLS.forEach(h => {
+      // วาดเนินเขาเป็นชั้นภูมิประเทศนูน พร้อมเงาและแนวสันเขา
+      HILLS.forEach((h, index) => {
         const [hx, hy] = mproj(h.x, h.z);
-        const hr = h.r * mapBox.k * 0.65;
+        const hr = h.r * mapBox.k * 0.88;
         if (hx < -50 || hx > MW + 50 || hy < -50 || hy > MH + 50) return;
-        c.fillStyle = 'rgba(55, 93, 62, 0.12)';
+        const mountain = index >= HILLS.length - 18,
+          rx = hr * (0.82 + (index % 4) * 0.07),
+          ry = hr * (0.42 + h.sy * 0.22),
+          phase = index * 1.73;
+        c.save();
+        c.translate(hx, hy);
+        c.rotate((index % 5 - 2) * 0.12);
+        c.fillStyle = 'rgba(47, 69, 48, 0.2)';
         c.beginPath();
-        c.ellipse(hx + 3, hy + 5, hr * 1.18, hr * 0.72, -0.25, 0, Math.PI * 2);
+        c.ellipse(4, ry * 0.36 + 5, rx * 1.12, ry * 0.78, 0, 0, Math.PI * 2);
         c.fill();
-        const hill = c.createLinearGradient(hx - hr, hy - hr, hx + hr, hy + hr);
-        hill.addColorStop(0, '#b6d2a6');
-        hill.addColorStop(1, '#789e78');
+        const ridgePath = (scale, offsetY = 0) => {
+          c.beginPath();
+          for (let j = 0; j < 12; j++) {
+            const a = (j / 12) * Math.PI * 2,
+              wobble = 0.86 + 0.1 * Math.sin(j * 2.4 + phase) + 0.045 * Math.cos(j * 4.1 + phase),
+              x = Math.cos(a) * rx * scale * wobble,
+              y = Math.sin(a) * ry * scale * wobble + offsetY;
+            j === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
+          }
+          c.closePath();
+        };
+        ridgePath(1);
+        const hill = c.createLinearGradient(-rx * 0.8, -ry, rx * 0.7, ry);
+        hill.addColorStop(0, mountain ? '#b5c8a8' : '#c4d6aa');
+        hill.addColorStop(0.42, mountain ? '#8eaa86' : '#9dbb8b');
+        hill.addColorStop(1, mountain ? '#557a68' : '#6d936e');
         c.fillStyle = hill;
-        c.beginPath();
-        c.moveTo(hx - hr, hy + hr * 0.28);
-        c.lineTo(hx - hr * 0.28, hy - hr * 0.82);
-        c.lineTo(hx + hr * 0.12, hy - hr * 0.25);
-        c.lineTo(hx + hr * 0.56, hy - hr * 0.62);
-        c.lineTo(hx + hr, hy + hr * 0.28);
-        c.closePath();
         c.fill();
-        c.strokeStyle = 'rgba(255,255,255,0.28)';
-        c.lineWidth = 1.5;
+        c.strokeStyle = 'rgba(255,255,255,0.58)';
+        c.lineWidth = 1.4;
         c.stroke();
+
+        ridgePath(0.72, ry * 0.06);
+        c.fillStyle = mountain ? 'rgba(185, 202, 158, 0.46)' : 'rgba(207, 223, 164, 0.52)';
+        c.fill();
+        c.strokeStyle = 'rgba(235, 243, 211, 0.58)';
+        c.lineWidth = 1;
+        c.stroke();
+
+        ridgePath(0.43, -ry * 0.02);
+        c.fillStyle = mountain ? 'rgba(222, 226, 183, 0.32)' : 'rgba(230, 235, 188, 0.42)';
+        c.fill();
+        c.strokeStyle = 'rgba(255,255,255,0.48)';
+        c.lineWidth = 0.9;
+        c.stroke();
+        c.restore();
       });
 
       const drawLandPatch = (t, side, color, pattern) => {
@@ -10755,6 +11525,10 @@
         c.save();
         c.translate(px, py);
         c.rotate(Math.atan2(tangent.x, tangent.z));
+        c.fillStyle = 'rgba(47, 67, 43, 0.16)';
+        c.beginPath();
+        c.ellipse(2, 5, 50, 28, 0, 0, Math.PI * 2);
+        c.fill();
         c.fillStyle = color;
         c.beginPath();
         c.ellipse(0, 0, 47, 26, 0, 0, Math.PI * 2);
@@ -10762,6 +11536,13 @@
         c.strokeStyle = 'rgba(87, 130, 76, 0.34)';
         c.lineWidth = 1.5;
         c.stroke();
+        const fieldLight = c.createLinearGradient(-38, -25, 35, 25);
+        fieldLight.addColorStop(0, 'rgba(255,255,255,0.32)');
+        fieldLight.addColorStop(1, 'rgba(49,83,47,0.08)');
+        c.fillStyle = fieldLight;
+        c.beginPath();
+        c.ellipse(-1, -2, 43, 22, 0, 0, Math.PI * 2);
+        c.fill();
         c.save();
         c.beginPath();
         c.ellipse(0, 0, 45, 24, 0, 0, Math.PI * 2);
@@ -10801,9 +11582,22 @@
           const q = mproj(pt.x, pt.z);
           i === a ? c.moveTo(q[0], q[1]) : c.lineTo(q[0], q[1]);
         }
+        c.lineCap = c.lineJoin = 'round';
+        c.lineWidth = w + 7;
+        c.strokeStyle = 'rgba(49, 64, 48, 0.2)';
+        c.stroke();
+        c.lineWidth = w + 3;
+        c.strokeStyle = '#fffdf2';
+        c.stroke();
         c.lineWidth = w;
         c.strokeStyle = col;
         c.stroke();
+        if (w >= 8 && dash.length === 0) {
+          c.setLineDash([2.5, 7]);
+          c.lineWidth = 1.2;
+          c.strokeStyle = 'rgba(255, 246, 213, 0.34)';
+          c.stroke();
+        }
         c.setLineDash([]);
       };
 
@@ -10815,15 +11609,22 @@
           const q = mproj(pt.x, pt.z);
           i === 0 ? c.moveTo(q[0], q[1]) : c.lineTo(q[0], q[1]);
         }
-        c.lineWidth = 20;
-        c.strokeStyle = 'rgba(74, 144, 184, 0.35)';
+        c.lineWidth = 25;
+        c.strokeStyle = 'rgba(48, 86, 93, 0.18)';
         c.stroke();
-        c.lineWidth = 12;
-        c.strokeStyle = '#4a95bc';
+        c.lineWidth = 19;
+        c.strokeStyle = '#d7c39a';
         c.stroke();
-        c.lineWidth = 2.5;
-        c.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-        c.setLineDash([12, 10]);
+        c.lineWidth = 13;
+        const riverFill = c.createLinearGradient(0, 0, MW, MH);
+        riverFill.addColorStop(0, '#78bfd1');
+        riverFill.addColorStop(0.5, '#438fb0');
+        riverFill.addColorStop(1, '#347b9e');
+        c.strokeStyle = riverFill;
+        c.stroke();
+        c.lineWidth = 2;
+        c.strokeStyle = 'rgba(222, 248, 247, 0.8)';
+        c.setLineDash([2, 10]);
         c.stroke();
         c.setLineDash([]);
 
@@ -10859,15 +11660,23 @@
         }
         c.lineCap = 'round';
         c.lineJoin = 'round';
+        c.lineWidth = 21;
+        c.strokeStyle = 'rgba(48, 86, 93, 0.16)';
+        c.stroke();
         c.lineWidth = 16;
-        c.strokeStyle = 'rgba(203, 178, 136, 0.55)';
+        c.strokeStyle = '#cbb288';
         c.stroke();
-        c.lineWidth = 11;
-        c.strokeStyle = '#3b92b8';
+        c.lineWidth = 12;
+        const wetlandFill = c.createLinearGradient(0, 0, MW, MH);
+        wetlandFill.addColorStop(0, '#72b7c8');
+        wetlandFill.addColorStop(1, '#3984a4');
+        c.strokeStyle = wetlandFill;
         c.stroke();
-        c.lineWidth = 5;
-        c.strokeStyle = '#7ac5dc';
+        c.lineWidth = 3;
+        c.strokeStyle = 'rgba(214, 242, 240, 0.78)';
+        c.setLineDash([3, 8]);
         c.stroke();
+        c.setLineDash([]);
       }
 
       // ขอบถนนสีขาวและถนนรอบวง
@@ -10878,6 +11687,133 @@
       // เส้นทางจันจว้า -> เวียงแก่น และเส้นทางต่อไปดอยผาตั้ง-ภูชี้ฟ้า
       drawRoadSegment(Math.round(T0 * MAP_SAMPLES), Math.round(T1 * MAP_SAMPLES), 11, '#376951');
       drawRoadSegment(Math.round(T1 * MAP_SAMPLES), Math.round(T3 * MAP_SAMPLES), 9, '#b27b4f');
+
+      // เน้นช่วงที่มีบ้านชนบท และปักหมุดบ้านให้เห็นได้ชัดบนแผนที่
+      {
+        const villageStart = tAt(136),
+          villageEnd = tAt(169);
+        c.save();
+        c.beginPath();
+        for (let i = 0; i <= 100; i++) {
+          const pt = route.getPoint(villageStart + ((villageEnd - villageStart) * i) / 100),
+            q = mproj(pt.x, pt.z);
+          i === 0 ? c.moveTo(q[0], q[1]) : c.lineTo(q[0], q[1]);
+        }
+        c.lineCap = c.lineJoin = 'round';
+        c.lineWidth = 19;
+        c.strokeStyle = 'rgba(120, 150, 93, 0.28)';
+        c.stroke();
+        c.setLineDash([5, 8]);
+        c.lineWidth = 3;
+        c.strokeStyle = '#587746';
+        c.stroke();
+        c.setLineDash([]);
+
+        const drawVillageHouse = (t, side) => {
+          const p = route.getPoint(t),
+            tangent = route.getTangent(t),
+            [x, y] = mproj(p.x + tangent.z * side * 19, p.z - tangent.x * side * 19);
+          c.fillStyle = 'rgba(35, 57, 39, 0.18)';
+          c.fillRect(x - 7, y + 5, 16, 3);
+          c.fillStyle = '#f3e7c9';
+          c.fillRect(x - 6, y - 2, 13, 8);
+          c.fillStyle = '#8b5940';
+          c.beginPath();
+          c.moveTo(x - 8, y - 2);
+          c.lineTo(x, y - 9);
+          c.lineTo(x + 9, y - 2);
+          c.closePath();
+          c.fill();
+          c.fillStyle = '#6f8f62';
+          c.fillRect(x - 2, y + 1, 4, 5);
+        };
+        [139, 147, 155, 163, 168].forEach((km, i) => drawVillageHouse(tAt(km), i % 2 ? -1 : 1));
+
+        c.restore();
+      }
+
+      const mapLabelBounds = [],
+        stopLabelOffsets = [
+          [0, -34], [0, 34], [48, -22], [-48, -22], [48, 22], [-48, 22],
+          [0, -60], [0, 60], [88, 0], [-88, 0], [112, -46], [-112, -46],
+          [112, 46], [-112, 46], [150, 0], [-150, 0]
+        ],
+        poiLabelOffsets = [
+          [0, -22], [0, 22], [32, -18], [-32, -18], [32, 18], [-32, 18],
+          [0, -40], [0, 40], [58, 0], [-58, 0]
+        ];
+      const drawMapLabel = (text, x, y, color, isStop = false) => {
+        c.font = `${isStop ? '700 13px' : '600 12px'} "Noto Sans Thai",sans-serif`;
+        c.textBaseline = 'middle';
+        const padX = isStop ? 8 : 7,
+          boxH = isStop ? 23 : 21,
+          boxW = Math.ceil(c.measureText(text).width) + padX * 2,
+          offsets = isStop ? stopLabelOffsets : poiLabelOffsets;
+        let best = null,
+          bestOverlap = Infinity;
+        for (const [dx, dy] of offsets) {
+          const left = Math.max(6, Math.min(MW - boxW - 6, x + dx - boxW / 2)),
+            top = Math.max(6, Math.min(MH - boxH - 30, y + dy - boxH / 2)),
+            rect = { left, top, right: left + boxW, bottom: top + boxH },
+            overlap = mapLabelBounds.reduce((sum, other) => {
+              const w = Math.max(0, Math.min(rect.right, other.right) - Math.max(rect.left, other.left)),
+                h = Math.max(0, Math.min(rect.bottom, other.bottom) - Math.max(rect.top, other.top));
+              return sum + w * h;
+            }, 0);
+          if (overlap < bestOverlap) {
+            best = rect;
+            bestOverlap = overlap;
+          }
+          if (overlap === 0) break;
+        }
+        if (!best || bestOverlap > 0) return;
+        mapLabelBounds.push(best);
+
+        const edgeX = Math.max(best.left + 5, Math.min(best.right - 5, x)),
+          edgeY = Math.max(best.top + 4, Math.min(best.bottom - 4, y));
+        if (Math.hypot(edgeX - x, edgeY - y) > 10) {
+          c.beginPath();
+          c.moveTo(x, y);
+          c.lineTo(edgeX, edgeY);
+          c.strokeStyle = 'rgba(57, 78, 60, 0.48)';
+          c.lineWidth = 1.2;
+          c.stroke();
+        }
+        c.save();
+        c.shadowColor = 'rgba(35, 54, 40, 0.2)';
+        c.shadowBlur = 7;
+        c.shadowOffsetY = 2;
+        c.fillStyle = 'rgba(255,255,255,0.96)';
+        c.strokeStyle = color;
+        c.lineWidth = isStop ? 1.4 : 1;
+        c.beginPath();
+        if (c.roundRect) c.roundRect(best.left, best.top, boxW, boxH, boxH / 2);
+        else c.rect(best.left, best.top, boxW, boxH);
+        c.fill();
+        c.stroke();
+        c.shadowColor = 'transparent';
+        c.fillStyle = '#294634';
+        c.textAlign = 'center';
+        c.fillText(text, (best.left + best.right) / 2, (best.top + best.bottom) / 2);
+        c.restore();
+      };
+
+      ROUTE.forEach(s => {
+        const p = route.getPoint(s.t),
+          [x, y] = mproj(p.x, p.z);
+        c.beginPath();
+        c.arc(x + 1, y + 2, 12, 0, Math.PI * 2);
+        c.fillStyle = 'rgba(34, 57, 43, 0.18)';
+        c.fill();
+        c.beginPath();
+        c.arc(x, y, 9, 0, Math.PI * 2);
+        c.fillStyle = s.color || '#376951';
+        c.fill();
+        c.lineWidth = 3;
+        c.strokeStyle = '#fff';
+        c.stroke();
+        drawMapLabel(`${s.name} · ${s.km} กม.`, x, y, s.color || '#376951', true);
+      });
 
       // วาดจุดกางเต็นท์ (ถ้ามี)
       if (window.campLights) {
@@ -10904,13 +11840,7 @@
         const p = route.getPoint(sp.t);
         const [qx, qy] = mproj(p.x, p.z);
         if (sp.type === 'zone') {
-          c.font = '700 14px "Noto Sans Thai",sans-serif';
-          c.textAlign = 'center';
-          c.lineWidth = 4;
-          c.strokeStyle = 'rgba(255,255,255,0.9)';
-          c.strokeText(sp.label, qx, qy - 16);
-          c.fillStyle = sp.color;
-          c.fillText(sp.label, qx, qy - 16);
+          drawMapLabel(sp.label, qx, qy, sp.color);
         } else {
           c.beginPath();
           c.arc(qx, qy, 5, 0, Math.PI * 2);
@@ -10919,13 +11849,8 @@
           c.lineWidth = 2;
           c.strokeStyle = '#fff';
           c.stroke();
-          c.font = '600 12px "Noto Sans Thai",sans-serif';
-          c.textAlign = 'left';
-          c.lineWidth = 3;
-          c.strokeStyle = '#fff';
-          c.strokeText(sp.label, qx + 8, qy + 3);
-          c.fillStyle = '#2d4a3e';
-          c.fillText(sp.label, qx + 8, qy + 3);
+          if (['7-11', 'ท่าเรือ', 'หนองน้ำ & ยอยักษ์', 'โรงเรียนชนบท 1', 'โรงเรียนชนบท 2'].includes(sp.label))
+            drawMapLabel(sp.label, qx, qy, sp.color);
         }
       });
 
@@ -10975,30 +11900,6 @@
       [0.016].forEach(t => drawBuilding(t, -25, 'store', '#e87c36'));
       [0.27, 0.58, 0.83].forEach(t => drawBuilding(t, -23, 'market', '#d77b47'));
 
-      // วาดจุดแวะหลักตลอดเส้นทาง
-      c.textBaseline = 'middle';
-      ROUTE.forEach(s => {
-        const p = route.getPoint(s.t),
-          q = mproj(p.x, p.z),
-          right = q[0] > MW * 0.68;
-        c.beginPath();
-        c.arc(q[0], q[1], 10, 0, Math.PI * 2);
-        c.fillStyle = s.color || '#376951';
-        c.fill();
-        c.lineWidth = 3.5;
-        c.strokeStyle = '#fff';
-        c.stroke();
-
-        c.font = '700 18px "Noto Sans Thai",sans-serif';
-        c.textAlign = right ? 'right' : 'left';
-        const label = `${s.name} (${s.km} กม.)`;
-        c.lineWidth = 5;
-        c.strokeStyle = '#fff';
-        c.strokeText(label, q[0] + (right ? -16 : 16), q[1]);
-        c.fillStyle = '#1f3b2d';
-        c.fillText(label, q[0] + (right ? -16 : 16), q[1]);
-      });
-
       mapBase = cv;
     }
 
@@ -11016,17 +11917,26 @@
       c.scale(mapView.scale, mapView.scale);
       c.drawImage(mapBase, 0, 0);
 
-      // วาดกล่องความทรงจำของผู้เล่นลงบนแผนที่
-      state.entries.forEach(e => {
-        const p = route.getPoint(e.routeT);
-        const [ex, ey] = mproj(p.x, p.z);
-        const m = moodOf(e.mood);
-        c.fillStyle = m.color;
-        c.fillRect(ex - 7, ey - 7, 14, 14);
-        c.lineWidth = 2;
-        c.strokeStyle = '#fff';
-        c.strokeRect(ex - 7, ey - 7, 14, 14);
-      });
+      // แสดงระยะทางที่เดินทางแล้วเป็นเส้นสีทองบนเส้นทางขาไป
+      if (state.routeT >= T0 && state.routeT <= T3) {
+        const start = Math.ceil(T0 * MAP_SAMPLES),
+          end = Math.min(MAP_SAMPLES - 1, Math.floor(state.routeT * MAP_SAMPLES));
+        if (end > start) {
+          c.beginPath();
+          for (let i = start; i <= end; i++) {
+            const pt = mapRouteSamples[i],
+              [px, py] = mproj(pt.x, pt.z);
+            i === start ? c.moveTo(px, py) : c.lineTo(px, py);
+          }
+          c.lineCap = c.lineJoin = 'round';
+          c.strokeStyle = 'rgba(255,255,255,0.9)';
+          c.lineWidth = 9;
+          c.stroke();
+          c.strokeStyle = '#e5a83b';
+          c.lineWidth = 4;
+          c.stroke();
+        }
+      }
 
       // วาดจุด Preview เวลาเอาเมาส์ชี้บนถนน
       if (hoverT !== null) {
@@ -11068,9 +11978,16 @@
       c.stroke();
       c.restore();
 
-      // แถบสถานะด้านล่างแผนที่
       const km = kmAt(state.routeT),
-        inTrip = state.routeT >= T0 && state.routeT <= T3;
+        inTrip = state.routeT >= T0 && state.routeT <= T3,
+        nearestStop = ROUTE.reduce((nearest, stop) =>
+          Math.abs(stop.km - km) < Math.abs(nearest.km - km) ? stop : nearest
+        );
+      mapCurrent.textContent = inTrip
+        ? `ตำแหน่งรถ · กม. ${Math.round(km)} / ${KM_TOTAL}${Math.abs(nearestStop.km - km) < 8 ? ` · ใกล้${nearestStop.name}` : ''}`
+        : 'ตำแหน่งรถ · เส้นทางวนกลับในชนบท';
+
+      // แถบสถานะด้านล่างแผนที่
       c.font = '700 17px "Noto Sans Thai",sans-serif';
       c.textBaseline = 'alphabetic';
       c.textAlign = 'left';
@@ -11167,6 +12084,9 @@
       // 1. อัปเดตค่าตำแหน่งเส้นทางและรีเซ็ตความเร็วแซง/เบรก
       state.routeT = targetT;
       window._ovt = 0;
+      window._ovtVelocity = 0;
+      window._ovtTilt = 0;
+      window._ovtState = 'idle';
       window._playerBrake = 1;
       window._playerBoost = 1;
 
@@ -11538,27 +12458,49 @@
 
         // แนวต้นไม้และกอไผ่ฝั่งตรงข้าม (ฉากหลังให้แม่น้ำดูร่มรื่น)
         const trunkG = new THREE.CylinderGeometry(0.16, 0.26, 2.6, 5).translate(0, 1.3, 0),
-          crownG = new THREE.IcosahedronGeometry(1, 1).scale(2.4, 2.0, 2.4).translate(0, 3.6, 0),
+          crownG = new THREE.IcosahedronGeometry(1, 1).scale(1.35, 1.15, 1.3).translate(0, 3.65, 0),
           TC = 110,
           trunks = new THREE.InstancedMesh(trunkG, new THREE.MeshLambertMaterial({ color: 0x7d6648 }), TC),
-          crowns = new THREE.InstancedMesh(crownG, new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true }), TC),
+          crowns = new THREE.InstancedMesh(crownG, new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true }), TC * 6),
           c = new THREE.Color();
-        let tcount = 0;
+        const canopyBlobs = [
+          [0, 0, 0, 1.08, 1.04, 1.08],
+          [1.05, 0.16, 0.12, 0.78, 0.76, 0.8],
+          [-1.0, 0.2, -0.08, 0.82, 0.82, 0.78],
+          [0.18, 0.22, 1.02, 0.8, 0.78, 0.82],
+          [-0.12, 0.12, -0.98, 0.76, 0.82, 0.78],
+          [0.08, 0.92, 0.02, 0.72, 0.68, 0.74]
+        ];
+        let tcount = 0, crownCount = 0;
         for (let i = 1; i < N - 1 && tcount < TC; i++) {
           if (RR() < 0.42) continue;
           const [x, z] = at(i, -(P[i].w + 7 + RR() * 12)),
-            s = 0.8 + RR() * 0.75;
+            s = 0.8 + RR() * 0.75,
+            yaw = RR() * 6.28;
           D3.position.set(x, -0.1, z);
-          D3.rotation.set(0, RR() * 6.28, 0);
+          D3.rotation.set(0, yaw, 0);
           D3.scale.set(s, s * (0.85 + RR() * 0.4), s);
           D3.updateMatrix();
           trunks.setMatrixAt(tcount, D3.matrix);
-          crowns.setMatrixAt(tcount, D3.matrix);
-          c.setHSL(0.24 + RR() * 0.1, 0.3 + RR() * 0.2, 0.26 + RR() * 0.12);
-          crowns.setColorAt(tcount, c);
+          const sy = D3.scale.y;
+          for (let bi = 0; bi < canopyBlobs.length; bi++) {
+            const blob = canopyBlobs[bi],
+              angle = yaw + (RR() - 0.5) * 0.24,
+              ox = (blob[0] * Math.cos(yaw) + blob[2] * Math.sin(yaw)) * s,
+              oz = (-blob[0] * Math.sin(yaw) + blob[2] * Math.cos(yaw)) * s;
+            D3.position.set(x + ox, -0.1 + blob[1] * sy, z + oz);
+            D3.rotation.set(0, angle, 0);
+            D3.scale.set(s * blob[3], sy * blob[4], s * blob[5]);
+            D3.updateMatrix();
+            crowns.setMatrixAt(crownCount, D3.matrix);
+            c.setHSL(0.24 + RR() * 0.1, 0.34 + RR() * 0.18, (bi === 0 ? 0.26 : 0.23) + RR() * 0.1);
+            crowns.setColorAt(crownCount, c);
+            crownCount++;
+          }
           tcount++;
         }
-        trunks.count = crowns.count = tcount;
+        trunks.count = tcount;
+        crowns.count = crownCount;
         trunks.instanceMatrix.needsUpdate = crowns.instanceMatrix.needsUpdate = true;
         if (crowns.instanceColor) crowns.instanceColor.needsUpdate = true;
         trunks.frustumCulled = crowns.frustumCulled = false;
@@ -12309,29 +13251,70 @@
 
     let fpsFrames = 0;
     let fpsLastTime = performance.now();
+    const performanceHotspots = [
+      ...(window.__TEMPLES || []).map(temple => ({ x: temple.x, z: temple.z, radius: 92, label: 'งานวัด' })),
+      ...[T_SCHOOL_FIELD, 0.81].map(t => {
+        const point = route.getPoint(t);
+        return { x: point.x, z: point.z, radius: 76, label: 'โรงเรียน' };
+      }),
+      ...ROUTE.filter(stop => ['janjawa', 'chiangsaen', 'chiangkhong', 'wiangkaen'].includes(stop.id)).map(stop => {
+        const point = route.getPoint(stop.t);
+        return { x: point.x, z: point.z, radius: 82, label: 'ในเมือง' };
+      })
+    ];
+    let hotspotCheckMs = 0;
+
+    function updatePerformanceHotspot(frameMs) {
+      hotspotCheckMs += frameMs;
+      if (hotspotCheckMs < 500) return;
+      hotspotCheckMs = 0;
+
+      const x = car.position.x,
+        z = car.position.z;
+      let label = '';
+      for (const hotspot of performanceHotspots) {
+        const dx = x - hotspot.x,
+          dz = z - hotspot.z;
+        if (dx * dx + dz * dz <= hotspot.radius * hotspot.radius) {
+          label = hotspot.label;
+          break;
+        }
+      }
+      if (label !== performanceHotspotLabel) {
+        performanceHotspotLabel = label;
+        nearPerformanceHotspot = !!label;
+        applyQuality();
+      }
+    }
     // ---------------------------------
 
     function frame(ms) {
       requestAnimationFrame(frame);
 
-      // --- โค้ดคำนวณ FPS ที่ต้องใส่เพิ่ม ---
+      const frameMs = lastTime ? ms - lastTime : 16;
+      lastTime = ms;
+      if (document.hidden || currentView !== 'home') {
+        fpsFrames = 0;
+        fpsLastTime = performance.now();
+        return;
+      }
+
+      updatePerformanceHotspot(frameMs);
       fpsFrames++;
       const fpsNow = performance.now();
       if (fpsNow - fpsLastTime >= 1000) {
-        fpsCounter.textContent = 'FPS: ' + fpsFrames;
+        const fps = Math.round((fpsFrames * 1000) / (fpsNow - fpsLastTime));
+        fpsCounter.textContent = 'FPS: ' + fps;
         // เปลี่ยนสีตัวหนังสือตามความลื่น (สีสว่างขึ้นเพื่อตัดกับพื้นหลังกระจก)
-        if (fpsFrames >= 50) fpsCounter.style.color = '#6ee7b7'; // สีเขียวมิ้นต์ (ลื่นมาก)
-        else if (fpsFrames >= 30) fpsCounter.style.color = '#fcd34d'; // สีเหลืองทอง (พอใช้)
+        if (fps >= 50) fpsCounter.style.color = '#6ee7b7'; // สีเขียวมิ้นต์ (ลื่นมาก)
+        else if (fps >= 30) fpsCounter.style.color = '#fcd34d'; // สีเหลืองทอง (พอใช้)
         else fpsCounter.style.color = '#fca5a5'; // สีแดงพาสเทล (กระตุก)
         
         fpsFrames = 0;
         fpsLastTime = fpsNow;
       }
 
-      const frameMs = lastTime ? ms - lastTime : 16;
       let dt = Math.min(frameMs / 1000, 0.05);
-      lastTime = ms;
-      if (document.hidden || currentView !== 'home') return;
       samplePerformance(frameMs);
       totalTime += dt;
       if (state.night || !window._schoolCrossingActive) {
@@ -14605,6 +15588,8 @@
         h.ph = LR() * 6;
         h.nt = LR();
         const st = mode === 'walk' ? safeWalkT(t) : t;
+        h.hotspotType = [T_SCHOOL_FIELD, 0.81].some(schoolT => Math.abs(st - schoolT) < 0.025) ? 'school' : '';
+        h.hotspotIndex = crowd.length;
         h.t0 = h.t = st;
         h.dist = 0;
         h.dir = LR() < 0.5 ? 1 : -1;
@@ -17810,6 +18795,11 @@
           p.g.rotation.y = yaw;
           return p;
         };
+        const placeShopTalker = (...args) => {
+          const p = placeTalker(...args);
+          p.hideAtNight = true;
+          return p;
+        };
         const pair = (t, mk) => {
           const tn = route.getTangent(t);
           for (const sd of LR() < 0.5 ? [1, -1] : [-1, 1])
@@ -17867,6 +18857,7 @@
               p.yBase = yBase;
               p.yaw = tp.rot + lrot;
               p.nt = 1; // กลางคืนหายไปทั้งหมด
+              p.hotspotType = 'temple';
               p.g.position.set(w.x, yBase, w.z);
               p.g.rotation.y = p.yaw;
               return p;
@@ -17888,6 +18879,7 @@
               p.z = a.z + (b.z - a.z) * u0;
               p.yaw = p.baseYaw + p.turn;
               p.nt = 1;
+              p.hotspotType = 'temple';
               p.g.position.set(p.x, 0, p.z);
               p.g.rotation.y = p.yaw;
               return p;
@@ -18179,54 +19171,54 @@
           // (ก) ซุ้มร้านน้ำปั่น-ขนม (ตั้งฝั่งเดียวกับโรงเรียน ถัดจากมุมรั้วโรงเรียน)
           const shop1Pos = toWorld(-20.0, 6.0);
           buildSchoolShop(shop1Pos.x, shop1Pos.z, rotFaceRoadRight, 0);
-          placeTalker(
+          placeShopTalker(
             { sk: pk(SK), top: 0xe98f7d, bt: 0x3d4a5c, skirt: 1, short: 1, hair: pk(HC), hs: 1, hat: 'towel', v: 0.2, k: 8 },
             ...(() => { const p = toWorld(-20.0, 6.25); return [p.x, p.z]; })(),
             rotFaceRoadRight, scT, 6.25
           );
           // นักเรียนยืนซื้อน้ำปั่นหน้าร้าน
           const cust1 = toWorld(-19.6, 4.95), cust2 = toWorld(-20.4, 4.95);
-          placeTalker(stu(), cust1.x, cust1.z, rotFaceRoadLeft, scT, 4.95);
-          placeTalker(stu(), cust2.x, cust2.z, rotFaceRoadLeft + 0.25, scT, 4.95);
+          placeShopTalker(stu(), cust1.x, cust1.z, rotFaceRoadLeft, scT, 4.95);
+          placeShopTalker(stu(), cust2.x, cust2.z, rotFaceRoadLeft + 0.25, scT, 4.95);
 
           // (ข) รถพ่วงข้าง/ซาเล้งขายไอติมหลอด & ลูกชิ้นทอด (จอดแวะขายริมทางหน้ากำแพงโรงเรียน)
           const cartPos = toWorld(8.0, 4.45);
           buildSidecarVendor(cartPos.x, cartPos.z, rotAlongRoad, idx === 0 ? 0xd9534a : 0x3d7ea6);
           const cartSeller = toWorld(7.8, 5.15);
-          placeTalker(
+          placeShopTalker(
             { sk: pk(SK), top: 0xf2c14e, bt: 0x2f3d38, short: 1, hair: pk(HC), hs: 0, hat: 'cap', v: 0.25, k: 8 },
             cartSeller.x, cartSeller.z, rotFaceRoadRight, scT, 5.15
           );
           const kidC1 = toWorld(6.6, 4.55), kidC2 = toWorld(9.3, 4.55);
-          placeTalker(stu(), kidC1.x, kidC1.z, rotAlongRoad, scT, 4.55);
-          placeTalker(stu(), kidC2.x, kidC2.z, rotAlongRoad + Math.PI, scT, 4.55);
+          placeShopTalker(stu(), kidC1.x, kidC1.z, rotAlongRoad, scT, 4.55);
+          placeShopTalker(stu(), kidC2.x, kidC2.z, rotAlongRoad + Math.PI, scT, 4.55);
 
           // (ค) รถกระบะพุ่มพวง / รถเร่ขายของชำ-ผลไม้-ขนม (จอดฝั่งตรงข้ามเยื้องประตูโรงเรียน)
           const truckPos = toWorld(-5.8, -5.85);
           buildPickupVendor(truckPos.x, truckPos.z, rotAlongRoad, idx === 0 ? 0x4f8bb0 : 0xe07a45);
           const truckSeller = toWorld(-8.2, -5.65);
-          placeTalker(
+          placeShopTalker(
             { sk: pk(SK), top: 0x6e9fb0, bt: 0x3d4a5c, short: 1, hair: pk(HC), hs: 0, hat: 'straw', v: 0.25, k: 8 },
             truckSeller.x, truckSeller.z, rotAlongRoad + Math.PI, scT, -5.65
           );
           const buyer1 = toWorld(-8.8, -4.85), buyer2 = toWorld(-7.5, -4.75);
-          placeTalker(
+          placeShopTalker(
             { sk: pk(SK), top: pk(BRIGHT), bt: pk(DKP), skirt: 1, short: 1, hair: pk(HC), hs: 2, p: 'bag', v: 0.25, k: 6 },
             buyer1.x, buyer1.z, rotFaceRoadRight, scT, -4.85
           );
-          placeTalker(stu(), buyer2.x, buyer2.z, rotFaceRoadRight - 0.3, scT, -4.75);
+          placeShopTalker(stu(), buyer2.x, buyer2.z, rotFaceRoadRight - 0.3, scT, -4.75);
 
           // (ง) ร้านลูกชิ้นปิ้ง-ผลไม้สดฝั่งตรงข้ามหน้าโรงเรียน
           const shop2Pos = toWorld(5.8, -5.9);
           buildSchoolShop(shop2Pos.x, shop2Pos.z, rotFaceRoadLeft, 1);
           const seller2 = toWorld(5.8, -6.15);
-          placeTalker(
+          placeShopTalker(
             { sk: pk(SK), top: 0x8fb177, bt: 0x2f3d38, skirt: 1, short: 1, hair: pk(HC), hs: 1, hat: 'straw', v: 0.2, k: 8 },
             seller2.x, seller2.z, rotFaceRoadLeft, scT, -6.15
           );
           const cust3 = toWorld(5.4, -4.75), cust4 = toWorld(6.3, -4.75);
-          placeTalker(stu(), cust3.x, cust3.z, rotFaceRoadRight, scT, -4.75);
-          placeTalker(elder('umb'), cust4.x, cust4.z, rotFaceRoadRight - 0.2, scT, -4.75);
+          placeShopTalker(stu(), cust3.x, cust3.z, rotFaceRoadRight, scT, -4.75);
+          placeShopTalker(elder('umb'), cust4.x, cust4.z, rotFaceRoadRight - 0.2, scT, -4.75);
 
           // (จ) นักเรียนยืนคุยกันตรงทางเข้าประตูโรงเรียน (alongRoad = -4.0)
           const gateA = toWorld(-2.2, 4.65), gateB = toWorld(-1.4, 4.65);
@@ -19006,8 +19998,13 @@
             dot = dx * fX + dz * fZ;
           const lim = dot > -22 ? (h.g.visible ? 3844 : 3481) : 1225, // ด้านหน้า 59-62m, ด้านหลัง 35m
             far = d2 > lim,
-            hid = (state.night || nF > 0.5) && h.nt > 0.15;
-          h.g.visible = !far && !hid;
+            hid = (state.night || nF > 0.5) && (h.hideAtNight || h.nt > 0.15),
+            hotspotLod =
+              nearPerformanceHotspot &&
+              (h.hotspotType === 'temple' || h.hotspotType === 'school') &&
+              d2 > 32 * 32 &&
+              h.hotspotIndex % 2 === 0;
+          h.g.visible = !far && !hid && !hotspotLod;
           if (!h.g.visible) continue;
           if ((wk || fwk || h.mode === 'talk') && !h.at && totalTime > h.cool && d2 < (wk || fwk ? 70 : 100)) {
             h.cool = totalTime + 28;
@@ -19016,7 +20013,14 @@
           if (
             h.at &&
             totalTime >= h.at &&
-            say(h, TALK[h.k % TALK.length][Math.floor(Math.random() * 3)], 1.85 * h.sc + 0.35, 3.6)
+            say(
+              h,
+              Math.random() < 0.65
+                ? nextEncouragement()
+                : TALK[h.k % TALK.length][Math.floor(Math.random() * 3)],
+              1.85 * h.sc + 0.35,
+              3.6
+            )
           )
             h.at = 0;
           h.ph += dt * (h.run ? 5.1 : 1.15 + h.v * 1.35);
@@ -19765,6 +20769,75 @@
         vflowers(o.x, o.z, Math.floor(vrn() * 6), 10 + Math.floor(vrn() * 9), 1.5, 0.95 + vrn() * 0.3);
       }
       const vFM = [];
+      const sunflowerGeo = vFlowerGeo(vMkR(743), {
+          n: 16,
+          L: 0.22,
+          W: 0.074,
+          tilt: 0.12,
+          c: 0xf2b51d,
+          c2: 0xffdf55,
+          cen: 0x55391c,
+          cr: 0.105,
+          stem: 1.35,
+          layers: 2
+        }),
+        sunflowerMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+      VMF.push(sunflowerMat);
+      sunflowerMat.onBeforeCompile = shader => {
+        shader.uniforms.uSunflowerT = VEG.t;
+        shader.uniforms.uSunflowerW = VEG.w;
+        shader.vertexShader = shader.vertexShader
+          .replace('#include <common>', '#include <common>\nuniform float uSunflowerT;\nuniform float uSunflowerW;')
+          .replace(
+            '#include <begin_vertex>',
+            'vec3 transformed = vec3(position);\n' +
+              '#ifdef USE_INSTANCING\nvec4 sunIp = instanceMatrix * vec4(0.,0.,0.,1.);\n#else\nvec4 sunIp = vec4(0.);\n#endif\n' +
+              'float sunPhase = sunIp.x * .62 + sunIp.z * .83;\n' +
+              'float sunHeight = clamp(position.y / 1.45, 0., 1.);\n' +
+              'float sunBend = sunHeight * sunHeight * (.13 + uSunflowerW * .08) * clamp(uSunflowerW * 3., 0., 1.);\n' +
+              'transformed.x += (sin(uSunflowerT * .55 + sunPhase) + .22 * sin(uSunflowerT * .82 + sunPhase * 1.7)) * sunBend;\n' +
+              'transformed.z += cos(uSunflowerT * .48 + sunPhase * 1.3) * sunBend * .62;'
+          );
+        shader.fragmentShader = shader.fragmentShader.replace(
+          '#include <normal_fragment_begin>',
+          THREE.ShaderChunk.normal_fragment_begin.replace('gl_FrontFacing ? 1.0 : - 1.0', '1.0')
+        );
+      };
+      const sunflowerSites = [
+        [0.14, -1],
+        [0.32, 1],
+        [0.5, -1],
+        [0.68, 1],
+        [0.86, -1]
+      ];
+      for (const [t, side] of sunflowerSites) {
+        const pathPoint = route.getPoint(t),
+          tangent = route.getTangent(t),
+          lateral = new THREE.Vector3(-tangent.z, 0, tangent.x),
+          center = pathPoint.clone().addScaledVector(lateral, side * 8.6),
+          D = new THREE.Object3D(),
+          matrices = [];
+        for (let row = -2; row <= 2; row++)
+          for (let column = -1; column <= 1; column++) {
+            const x = center.x + tangent.x * (row * 0.78) + lateral.x * (column * 0.78),
+              z = center.z + tangent.z * (row * 0.78) + lateral.z * (column * 0.78);
+            if (!spotOK(x, z, 0.26)) continue;
+            D.position.set(x, -0.02, z);
+            D.rotation.set((vrn() - 0.5) * 0.06, vrn() * 6.283, (vrn() - 0.5) * 0.06);
+            const scale = 0.88 + vrn() * 0.24;
+            D.scale.set(scale, scale, scale);
+            D.updateMatrix();
+            matrices.push(D.matrix.clone());
+          }
+        if (!matrices.length) continue;
+        const patch = new THREE.InstancedMesh(sunflowerGeo, sunflowerMat, matrices.length);
+        patch.name = 'sunflower-patch';
+        matrices.forEach((matrix, i) => patch.setMatrixAt(i, matrix));
+        patch.instanceMatrix.needsUpdate = true;
+        patch.frustumCulled = false;
+        scene.add(patch);
+        vFM.push({ m: patch, x: center.x, z: center.z, maxDistance: 86, reducedDistance: 48 });
+      }
       // แบ่งหญ้าและดอกไม้ริมทางออกเป็นโซนย่อย (Spatial Chunking 80x80m) เพื่อซ่อนโซนที่อยู่ไกลเกิน 95m
       function addChunkedVeg(geo, mat, list, hasColor) {
         const buckets = new Map();
@@ -19996,8 +21069,9 @@
         }
         for (const f of vFM) {
           const dx = f.x - car.position.x,
-            dz = f.z - car.position.z;
-          f.m.visible = dx * dx + dz * dz < 95 * 95;
+            dz = f.z - car.position.z,
+            maxDistance = state.reduced ? f.reducedDistance || 95 : f.maxDistance || 95;
+          f.m.visible = dx * dx + dz * dz < maxDistance * maxDistance;
         }
         fillL.position.set(car.position.x - sd.x * 30, 16, car.position.z - sd.z * 30);
         fillL.target.position.set(car.position.x, 0, car.position.z);
@@ -20412,16 +21486,27 @@
   
   async function bootApp() {
     // 1. ดึงข้อมูลล่าสุด (รวมถึงตำแหน่งรถ) จาก Supabase ก่อน
+    const bootAccountId = myId;
     try {
       $('loading').innerHTML = '<div class="spinner"></div><span>กำลังเชื่อมต่อข้อมูลของคุณ...</span>';
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/road_of_days?id=eq.${myId}&select=data`, {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/road_of_days?id=eq.${encodeURIComponent(bootAccountId)}&select=data`, {
         headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
       });
       const rows = await res.json();
       
-      if (rows && rows.length > 0 && rows[0].data) {
-        state = validData(rows[0].data);
-        localStorage.setItem(KEY, JSON.stringify(state)); // แบคอัพลง Local ไว้
+      if (bootAccountId === myId && rows && rows.length > 0 && rows[0].data) {
+        const cloudState = validData(rows[0].data);
+        const cloudEntryIds = new Set(cloudState.entries.map(entry => entry.id));
+        const hasPendingChanges = localStateAccountId === bootAccountId &&
+          (localStorage.getItem(CLOUD_PENDING_KEY + bootAccountId) === '1' ||
+            state.entries.some(entry => !cloudEntryIds.has(entry.id)));
+        if (hasPendingChanges) {
+          localStorage.setItem(CLOUD_PENDING_KEY + bootAccountId, '1');
+        } else {
+          state = cloudState;
+          localStateAccountId = bootAccountId;
+          localStorage.setItem(KEY, JSON.stringify(state)); // แบคอัพลง Local ไว้
+        }
       }
     } catch (e) {
       console.warn('โหลดคลาวด์ไม่สำเร็จ ใช้ตำแหน่งจากเครื่องแทน');
