@@ -158,6 +158,21 @@
     }
     renderSyncStatus();
   }
+  function cloudReadFailureMessage(error) {
+    const status = error instanceof Error && /^Supabase Fetch Error: (\d+)$/.exec(error.message);
+    if (status) {
+      const code = Number(status[1]);
+      if (code === 401) return 'Supabase ปฏิเสธ API key (HTTP 401)';
+      if (code === 403) return 'ไม่มีสิทธิ์อ่านข้อมูล · ตรวจ RLS Policy (HTTP 403)';
+      if (code === 404) return 'ไม่พบตารางหรือ REST endpoint (HTTP 404)';
+      if (code === 429) return 'คำขอถูกจำกัดชั่วคราว (HTTP 429)';
+      if (code >= 500) return `Supabase ขัดข้องชั่วคราว (HTTP ${code})`;
+      return `Supabase ตอบกลับผิดพลาด (HTTP ${code})`;
+    }
+    if (error instanceof TypeError) return 'เชื่อมต่อ Supabase ไม่ได้ · ตรวจอินเทอร์เน็ตหรือ CORS';
+    if (error instanceof SyntaxError) return 'ข้อมูลตอบกลับจาก Supabase อ่านไม่ได้';
+    return 'ข้อมูลจาก Supabase ไม่ถูกต้อง';
+  }
   window.triggerManualSync = async () => {
     if (syncStatusState.mode === 'syncing') return;
     await loadOnline();
@@ -497,8 +512,9 @@
       if (accountId !== myId) return false;
       console.error(e);
       isCloudSynced = false;
-      setSyncStatus('error', 'ออฟไลน์ · เก็บในเครื่อง');
-      toast(svgInline('alert') + ' ดึงข้อมูลจาก Supabase ไม่สำเร็จ (ตรวจสอบอินเทอร์เน็ตหรือ RLS Policy)');
+      const failure = cloudReadFailureMessage(e);
+      setSyncStatus('error', failure);
+      toast(svgInline('alert') + ' ' + failure + ' · ข้อมูลในเครื่องยังอยู่');
       return false;
     }
   }
