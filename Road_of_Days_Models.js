@@ -920,6 +920,8 @@ window.ROD_Models = {
     playSet.add(tower, tRoof, slideChute);
     group.add(playSet);
 
+    const treeLeafGeo = new THREE.IcosahedronGeometry(1, 0);
+    const treeBranchGeo = new THREE.CylinderGeometry(0.035, 0.075, 1, 5);
     const createLowPolyTree = (px, pz, scale, colorHex) => {
       const treeGrp = new THREE.Group();
       treeGrp.position.set(px, 0.24, pz);
@@ -931,17 +933,39 @@ window.ROD_Models = {
       treeGrp.add(trunk);
 
       const leafM = new THREE.MeshLambertMaterial({ color: colorHex, ...matOptions });
-      const c1 = new THREE.Mesh(new THREE.IcosahedronGeometry(1.18, 0), leafM);
-      c1.position.set(0, 2.05, 0);
-      c1.castShadow = true;
-      const c2 = new THREE.Mesh(new THREE.IcosahedronGeometry(0.88, 0), leafM);
-      c2.position.set(0.55, 1.68, 0.4);
-      c2.castShadow = true;
-      const c3 = new THREE.Mesh(new THREE.IcosahedronGeometry(0.78, 0), leafM);
-      c3.position.set(-0.5, 1.72, -0.35);
-      c3.castShadow = true;
+      const leafShadeM = new THREE.MeshLambertMaterial({ color: colorHex, ...matOptions });
+      leafShadeM.color.multiplyScalar(0.78);
+      const leafLightM = new THREE.MeshLambertMaterial({ color: colorHex, ...matOptions });
+      leafLightM.color.lerp(new THREE.Color(0xffffff), 0.16);
+      const levels = [
+        { y: 1.38, length: 1.02 },
+        { y: 1.92, length: 0.76 },
+        { y: 2.42, length: 0.48 }
+      ];
+      levels.forEach((level, li) => {
+        for (let b = 0; b < 4; b++) {
+          const angle = (b / 4) * Math.PI * 2 + li * 0.42,
+            direction = new THREE.Vector3(Math.cos(angle), 0.22, Math.sin(angle)).normalize(),
+            length = level.length * (0.9 + ((b + li) % 3) * 0.06),
+            start = new THREE.Vector3(0, level.y, 0),
+            end = start.clone().addScaledVector(direction, length),
+            branch = new THREE.Mesh(treeBranchGeo, trunkMat);
+          branch.position.copy(start).lerp(end, 0.5);
+          branch.scale.y = length;
+          branch.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
+          branch.castShadow = li === 0;
+          treeGrp.add(branch);
 
-      treeGrp.add(c1, c2, c3);
+          const leafMaterials = [leafM, leafShadeM, leafLightM],
+            foliage = new THREE.Mesh(treeLeafGeo, leafMaterials[(b + li) % leafMaterials.length]);
+          foliage.position.copy(end);
+          foliage.scale.set(0.68, 0.2, 0.28);
+          foliage.rotation.y = angle;
+          foliage.rotation.z = -direction.y * 0.5;
+          foliage.castShadow = li === 0;
+          treeGrp.add(foliage);
+        }
+      });
       group.add(treeGrp);
     };
 
@@ -1234,22 +1258,98 @@ window.ROD_Models = {
     group.position.set(x, 0, z);
     group.rotation.y = rotationY;
     
-    // Materials
-    const woodMat = new THREE.MeshLambertMaterial({ color: 0x8b5a2b, flatShading: true });
+    const woodMat = new THREE.MeshLambertMaterial({ color: 0x79502f, flatShading: true });
+    const plankMat = new THREE.MeshLambertMaterial({ color: 0xb98551, flatShading: true });
     const lightWoodMat = new THREE.MeshLambertMaterial({ color: 0xd2b48c, flatShading: true });
-    const darkRoofMat = new THREE.MeshLambertMaterial({ color: 0x3d352b, flatShading: true });
+    const darkMat = new THREE.MeshLambertMaterial({ color: 0x303832, flatShading: true });
+    const darkRoofMat = new THREE.MeshLambertMaterial({ color: 0x41463f, flatShading: true });
+    const roofRibMat = new THREE.MeshLambertMaterial({ color: 0x66685d, flatShading: true });
     const whiteMat = new THREE.MeshLambertMaterial({ color: 0xfffdfa, flatShading: true });
-    const glassMat = new THREE.MeshStandardMaterial({ color: 0xadd8e6, transparent: true, opacity: 0.5, metalness: 0.8 });
+    const metalMat = new THREE.MeshLambertMaterial({ color: 0x777c75, flatShading: true });
+    const ceramicMat = new THREE.MeshLambertMaterial({ color: 0xe9e1d1, flatShading: true });
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0xadd8e6, transparent: true, opacity: 0.5, roughness: 0.35, metalness: 0.15 });
+    const coffeeMat = new THREE.MeshLambertMaterial({ color: 0x4b2d1f });
+    const skinMat = new THREE.MeshLambertMaterial({ color: 0xd9a17f });
+    const apronMat = new THREE.MeshLambertMaterial({ color: 0x526653, flatShading: true });
+    const signTex = (() => {
+      const cv = document.createElement('canvas');
+      cv.width = 512;
+      cv.height = 160;
+      const ctx = cv.getContext('2d');
+      ctx.fillStyle = '#303832';
+      ctx.fillRect(0, 0, 512, 160);
+      ctx.strokeStyle = '#d7b574';
+      ctx.lineWidth = 8;
+      ctx.strokeRect(8, 8, 496, 144);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#fff2d6';
+      ctx.font = '700 58px "Noto Sans Thai", sans-serif';
+      ctx.fillText('กาแฟริมทาง', 256, 80);
+      ctx.fillStyle = '#e5c889';
+      ctx.font = '600 25px Outfit, sans-serif';
+      ctx.fillText('SLOW BAR  ·  FRESH COFFEE', 256, 124);
+      const texture = new THREE.CanvasTexture(cv);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      if (document.fonts) document.fonts.ready.then(() => { texture.needsUpdate = true; });
+      return texture;
+    })();
+    const signFaceMat = new THREE.MeshBasicMaterial({ map: signTex });
+    const menuTex = (() => {
+      const cv = document.createElement('canvas');
+      cv.width = 256;
+      cv.height = 320;
+      const ctx = cv.getContext('2d');
+      ctx.fillStyle = '#eee1c5';
+      ctx.fillRect(0, 0, 256, 320);
+      ctx.fillStyle = '#4d3827';
+      ctx.textAlign = 'center';
+      ctx.font = '700 30px "Noto Sans Thai", sans-serif';
+      ctx.fillText('เมนูกาแฟ', 128, 48);
+      ctx.font = '500 20px "Noto Sans Thai", sans-serif';
+      ['กาแฟดริป', 'ลาเต้', 'ชาเชียงราย'].forEach((label, i) => {
+        const yy = 105 + i * 58;
+        ctx.textAlign = 'left';
+        ctx.fillText(label, 22, yy);
+        ctx.textAlign = 'right';
+        ctx.fillText(['45.-', '50.-', '40.-'][i], 232, yy);
+        ctx.strokeStyle = '#c9b894';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(20, yy + 14);
+        ctx.lineTo(236, yy + 14);
+        ctx.stroke();
+      });
+      const texture = new THREE.CanvasTexture(cv);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      if (document.fonts) document.fonts.ready.then(() => { texture.needsUpdate = true; });
+      return texture;
+    })();
     
     // แผ่นพื้นไม้
     const floor = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.1, 2.5), woodMat);
     floor.position.set(0, 0.05, 0);
     group.add(floor);
+    for (let i = 0; i < 7; i++) {
+      const plank = new THREE.Mesh(new THREE.BoxGeometry(3.42, 0.012, 0.025), plankMat);
+      plank.position.set(0, 0.106, -1.02 + i * 0.34);
+      group.add(plank);
+    }
     
     // เคาน์เตอร์บาร์
     const counter = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.9, 0.8), lightWoodMat);
     counter.position.set(0, 0.5, 0.6);
     group.add(counter);
+    const counterTop = new THREE.Mesh(new THREE.BoxGeometry(2.92, 0.09, 0.92), woodMat);
+    counterTop.position.set(0, 0.995, 0.58);
+    group.add(counterTop);
+    for (let i = 0; i < 9; i++) {
+      const slat = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.66, 0.025), plankMat);
+      slat.position.set(-1.25 + i * 0.3125, 0.5, 1.012);
+      group.add(slat);
+    }
+    const counterFoot = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.08, 0.84), darkMat);
+    counterFoot.position.set(0, 0.14, 0.6);
+    group.add(counterFoot);
     
     // เสา 4 ต้น และหลังคาเพิงหมาแหงน
     for (const sx of [-1.6, 1.6]) {
@@ -1259,30 +1359,166 @@ window.ROD_Models = {
         group.add(pillar);
       }
     }
-    const roof = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.15, 2.8), darkRoofMat);
+    const roof = new THREE.Group();
     roof.position.set(0, 2.6, 0);
     roof.rotation.x = -0.15;
+    const roofBase = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.15, 2.8), darkRoofMat);
+    roof.add(roofBase);
+    for (let i = 0; i < 9; i++) {
+      const rib = new THREE.Mesh(new THREE.BoxGeometry(3.72, 0.035, 0.045), roofRibMat);
+      rib.position.set(0, 0.095, -1.25 + i * 0.31);
+      roof.add(rib);
+    }
+    for (const zPos of [-1.38, 1.38]) {
+      const fascia = new THREE.Mesh(new THREE.BoxGeometry(3.9, 0.17, 0.1), woodMat);
+      fascia.position.set(0, -0.03, zPos);
+      roof.add(fascia);
+    }
+    for (const zPos of [-0.88, 0, 0.88]) {
+      const rafter = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.09, 0.1), woodMat);
+      rafter.position.set(0, -0.16, zPos);
+      roof.add(rafter);
+    }
     group.add(roof);
     
-    // อุปกรณ์ดริปกาแฟ (กาน้ำคอหอย ถ้วยดริป)
+    // อุปกรณ์ชงกาแฟและเครื่องเอสเปรสโซบนเคาน์เตอร์
     const kettle = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, 0.25, 8), new THREE.MeshStandardMaterial({color: 0x111111, metalness: 0.8}));
-    kettle.position.set(-0.8, 1.08, 0.6);
-    const dripper = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.03, 0.12, 8), whiteMat);
-    dripper.position.set(-0.4, 1.02, 0.6);
-    group.add(kettle, dripper);
+    kettle.position.set(-0.87, 1.14, 0.42);
+    const kettleSpout = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.035, 0.22, 6), metalMat);
+    kettleSpout.position.set(-0.68, 1.17, 0.45);
+    kettleSpout.rotation.z = -0.7;
+    const kettleHandle = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.012, 5, 8, Math.PI), metalMat);
+    kettleHandle.position.set(-0.87, 1.29, 0.42);
+    kettleHandle.rotation.z = Math.PI;
+    const dripper = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.16, 8), ceramicMat);
+    dripper.position.set(-0.38, 1.11, 0.42);
+    const dripServer = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.07, 0.13, 8), glassMat);
+    dripServer.position.set(-0.38, 1.02, 0.42);
+    const espressoBody = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.38, 0.4), metalMat);
+    espressoBody.position.set(0.55, 1.22, 0.37);
+    const espressoTop = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.06, 0.43), darkMat);
+    espressoTop.position.set(0.55, 1.44, 0.37);
+    const espressoPanel = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.13, 0.025), darkMat);
+    espressoPanel.position.set(0.55, 1.3, 0.584);
+    group.add(kettle, kettleSpout, kettleHandle, dripper, dripServer, espressoBody, espressoTop, espressoPanel);
+    for (const dx of [-0.13, 0, 0.13]) {
+      const button = new THREE.Mesh(new THREE.SphereGeometry(0.025, 6, 5), dx === 0 ? plankMat : whiteMat);
+      button.position.set(0.55 + dx, 1.31, 0.605);
+      group.add(button);
+    }
+    const cupSaucer = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.018, 10), ceramicMat);
+    cupSaucer.position.set(0.52, 1.055, 0.76);
+    const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.045, 0.12, 8), whiteMat);
+    cup.position.set(0.52, 1.12, 0.76);
+    const coffee = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.008, 8), coffeeMat);
+    coffee.position.set(0.52, 1.181, 0.76);
+    const cupHandle = new THREE.Mesh(new THREE.TorusGeometry(0.035, 0.009, 5, 8, Math.PI), ceramicMat);
+    cupHandle.position.set(0.58, 1.13, 0.76);
+    cupHandle.rotation.z = Math.PI / 2;
+    group.add(cupSaucer, cup, coffee, cupHandle);
 
-    // ป้าย "SLOW BAR"
-    const sign = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.4, 0.05), whiteMat);
+    // ป้ายหน้าร้านและเมนูอ่านได้จากฝั่งถนน
+    const sign = new THREE.Mesh(new THREE.BoxGeometry(1.95, 0.62, 0.09), darkMat);
     sign.position.set(0, 2.2, 1.2);
-    group.add(sign);
+    const signFace = new THREE.Mesh(new THREE.PlaneGeometry(1.82, 0.52), signFaceMat);
+    signFace.position.set(0, 2.2, 1.251);
+    group.add(sign, signFace);
+    const menuBoard = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.9, 0.07), woodMat);
+    menuBoard.position.set(-1.16, 1.7, 1.12);
+    const menuFace = new THREE.Mesh(new THREE.PlaneGeometry(0.58, 0.76), new THREE.MeshBasicMaterial({ map: menuTex }));
+    menuFace.position.set(-1.16, 1.7, 1.16);
+    group.add(menuBoard, menuFace);
+
+    // โคมไฟใต้ชายคา โทนอุ่นแบบร้านกาแฟชนบท
+    const lanternFrameMat = new THREE.MeshLambertMaterial({ color: 0x493a2a });
+    const lanternGlowMat = new THREE.MeshBasicMaterial({ color: 0xffd98a });
+    const lanternTop = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.12, 6), lanternFrameMat);
+    lanternTop.position.set(0.95, 2.34, 0.72);
+    const lanternGlass = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), lanternGlowMat);
+    lanternGlass.position.set(0.95, 2.21, 0.72);
+    const lanternBase = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.08, 0.05, 6), lanternFrameMat);
+    lanternBase.position.set(0.95, 2.1, 0.72);
+    group.add(lanternTop, lanternGlass, lanternBase);
+
+    // ม้านั่งเตี้ยและกระถางไม้ประดับช่วยให้หน้าร้านไม่โล่ง
+    const stoolSeatMat = new THREE.MeshLambertMaterial({ color: 0x98633b });
+    for (const sx of [-0.92, 0.92]) {
+      const seat = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.2, 0.09, 8), stoolSeatMat);
+      seat.position.set(sx, 0.53, -0.57);
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 0.43, 6), woodMat);
+      leg.position.set(sx, 0.28, -0.57);
+      group.add(seat, leg);
+    }
+    const potMat = new THREE.MeshLambertMaterial({ color: 0xa65f43, flatShading: true });
+    const leafMat = new THREE.MeshLambertMaterial({ color: 0x52754a, flatShading: true });
+    for (const sx of [-1.38, 1.38]) {
+      const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.1, 0.2, 7), potMat);
+      pot.position.set(sx, 0.25, 0.92);
+      group.add(pot);
+      for (let i = 0; i < 3; i++) {
+        const leaf = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.28, 5), leafMat);
+        leaf.position.set(sx + (i - 1) * 0.07, 0.48 + (i === 1 ? 0.05 : 0), 0.92);
+        leaf.rotation.z = (i - 1) * 0.3;
+        group.add(leaf);
+      }
+    }
     
-    // บาริสต้า
+    // บาริสต้าพร้อมผ้ากันเปื้อนและแขนที่วางหลังเคาน์เตอร์
     const barista = new THREE.Group();
     barista.position.set(0, 1.0, -0.2);
-    const bBody = new THREE.Mesh(new THREE.CapsuleGeometry(0.18, 0.3, 4, 8), new THREE.MeshLambertMaterial({color: 0x333333}));
-    const bHead = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 8), new THREE.MeshLambertMaterial({color: 0xffccaa}));
-    bHead.position.y = 0.4;
-    barista.add(bBody, bHead);
+    const shirtMat = new THREE.MeshLambertMaterial({ color: 0xeee6d4, flatShading: true });
+    const bBody = new THREE.Mesh(new THREE.CapsuleGeometry(0.17, 0.3, 4, 10), shirtMat);
+    bBody.position.y = 0.31;
+    bBody.castShadow = true;
+    const waist = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.16, 0.16, 8), apronMat);
+    waist.position.y = 0.12;
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.1, 7), skinMat);
+    neck.position.y = 0.55;
+    const bHead = new THREE.Mesh(new THREE.SphereGeometry(0.135, 10, 8), skinMat);
+    bHead.position.set(0, 0.68, 0.015);
+    bHead.scale.set(0.92, 1.08, 0.92);
+    const hair = new THREE.Mesh(new THREE.SphereGeometry(0.14, 9, 6), woodMat);
+    hair.scale.set(1.02, 0.5, 1.02);
+    hair.position.set(0, 0.76, -0.025);
+    const fringe = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 5), woodMat);
+    fringe.scale.set(1.25, 0.36, 0.65);
+    fringe.position.set(0, 0.765, 0.105);
+    const apron = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.35, 0.045), apronMat);
+    apron.position.set(0, 0.28, 0.155);
+    const apronPocket = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.09, 0.015), lightWoodMat);
+    apronPocket.position.set(0, 0.24, 0.184);
+    const apronStrap = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.17, 0.035), apronMat);
+    apronStrap.position.set(0, 0.48, 0.13);
+    const eyeMat = new THREE.MeshLambertMaterial({ color: 0x30251e });
+    const eyes = [-1, 1].map(side => {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.014, 6, 5), eyeMat);
+      eye.position.set(side * 0.045, 0.69, 0.132);
+      return eye;
+    });
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.018, 6, 5), skinMat);
+    nose.position.set(0, 0.655, 0.14);
+    barista.add(bBody, waist, neck, bHead, hair, fringe, apron, apronPocket, apronStrap, ...eyes, nose);
+    const workArms = [];
+    for (const sx of [-1, 1]) {
+      const shoulder = new THREE.Group();
+      shoulder.position.set(sx * 0.15, 0.4, 0.02);
+      shoulder.rotation.x = -0.45;
+      shoulder.rotation.z = sx * 0.12;
+      const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.05, 0.2, 7), shirtMat);
+      sleeve.position.y = -0.1;
+      const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.043, 0.22, 7), skinMat);
+      forearm.position.set(-sx * 0.02, -0.25, 0.08);
+      forearm.rotation.x = -0.72;
+      const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.044, 0.038, 0.035, 7), apronMat);
+      cuff.position.set(-sx * 0.02, -0.19, 0.055);
+      cuff.rotation.x = -0.72;
+      const hand = new THREE.Mesh(new THREE.SphereGeometry(0.043, 7, 5), skinMat);
+      hand.position.set(-sx * 0.02, -0.31, 0.16);
+      shoulder.add(sleeve, cuff, forearm, hand);
+      barista.add(shoulder);
+      workArms.push(shoulder);
+    }
+    barista.userData.workArms = workArms;
     group.add(barista);
 
     scene.add(group);

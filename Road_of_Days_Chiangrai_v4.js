@@ -2,15 +2,18 @@
 (() => {
   'use strict';
 
+  /* Edit this file and Road_of_Days_Scene_Models.js, then run npm run build:app. */
+
   /* ============================================================================
-   * src/app/01-constants-moods.js
+   * app/01-constants-moods.js
    * ค่าคงที่พื้นฐาน: ตัวช่วย $ (getElementById), KEY ของ localStorage และรายการอารมณ์ (moods) พร้อมสี/ข้อความ/ธีมฉาก
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   const $ = id => document.getElementById(id),
     KEY = 'road-of-days-3d-v4';
   const CLOUD_PENDING_KEY = 'road-of-days-cloud-pending:';
+  const PLACES_PENDING_KEY = 'road-of-days-places-pending:';
   const moods = [
     {
       id: 'happy',
@@ -75,9 +78,9 @@
   ];
 
   /* ============================================================================
-   * src/app/02-constants-route.js
+   * app/02-constants-route.js
    * ค่าคงที่เส้นทาง: ระยะทาง/ความเร็ว (KM_TOTAL, KMH), จุดแวะ (ROUTE)
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   const KM_WIANG_KAEN = 135,
@@ -114,7 +117,7 @@
   ].map(s => ({ ...s, t: tAt(s.km) }));
 
   /* ============================================================================
-   * src/app/03-state-storage.js
+   * app/03-state-storage.js
    * สถานะแอป (state), โหลดและบันทึกข้อมูลแบบออนไลน์ด้วย Supabase
    * ========================================================================== */
 
@@ -347,10 +350,13 @@
 
   let state = {
       entries: [],
+      places: [],
+      placesUpdatedAt: 0,
       lanterns: 0,
       mood: 'calm',
       night: false,
       routeT: 0.0112,
+      routeUpdatedAt: 0,
       reduced: matchMedia('(prefers-reduced-motion: reduce)').matches,
       qualityMode: 'auto',
       visualMode: 'natural',
@@ -363,18 +369,35 @@
 
   function validData(s) {
     if (typeof s === 'string') s = JSON.parse(s);
-    if (!s || !Array.isArray(s.entries) || s.entries.length > 10000) throw Error('format');
+    if (!s || !Array.isArray(s.entries) || s.entries.length > 10000 ||
+      (s.places !== undefined && (!Array.isArray(s.places) || s.places.length > 200))) throw Error('format');
     const ids = new Set();
     s.entries.forEach(e => {
       if (!e || typeof e.id !== 'string' || ids.has(e.id) || !/^\d{4}-\d{2}-\d{2}$/.test(e.date) || !Number.isFinite(new Date(e.date + 'T12:00:00').getTime()) || typeof e.title !== 'string' || !e.title.trim() || e.title.length > 90 || typeof e.text !== 'string' || !e.text.trim() || e.text.length > 3000 || typeof e.place !== 'string' || e.place.length > 100 || !moods.some(m => m.id === e.mood) || typeof e.routeT !== 'number' || e.routeT < 0 || e.routeT > 1) throw Error('entry');
       ids.add(e.id);
     });
+    const placeIds = new Set(),
+      placeNames = new Set();
+    const places = (s.places || []).map(place => {
+      if (!place || typeof place.id !== 'string' || !place.id || place.id.length > 80 ||
+        placeIds.has(place.id) || typeof place.name !== 'string' || !place.name.trim() ||
+        place.name.length > 80 ||
+        (place.note !== undefined && place.note !== null && typeof place.note !== 'string') ||
+        (place.note || '').length > 160 ||
+        placeNames.has(place.name.trim().toLocaleLowerCase())) throw Error('place');
+      placeIds.add(place.id);
+      placeNames.add(place.name.trim().toLocaleLowerCase());
+      return { id: place.id, name: place.name.trim(), note: (place.note || '').trim() };
+    });
     return {
       entries: s.entries.map(e => ({ id: e.id, date: e.date, title: e.title, text: e.text, place: e.place, mood: e.mood, routeT: e.routeT, fav: !!e.fav })),
+      places,
+      placesUpdatedAt: Number.isSafeInteger(s.placesUpdatedAt) && s.placesUpdatedAt >= 0 ? s.placesUpdatedAt : 0,
       lanterns: Number.isSafeInteger(s.lanterns) && s.lanterns >= 0 ? s.lanterns : 0,
       mood: moods.some(m => m.id === s.mood) ? s.mood : 'calm',
       night: !!s.night,
       routeT: Math.min(0.98, Math.max(0.01, +s.routeT || 0.0112)),
+      routeUpdatedAt: Number.isSafeInteger(s.routeUpdatedAt) && s.routeUpdatedAt >= 0 ? s.routeUpdatedAt : 0,
       reduced: !!s.reduced,
       qualityMode: ['auto','0','1','2','3','4'].includes(s.qualityMode) ? s.qualityMode : (s.lowQuality ? '0' : 'auto'),
       visualMode: ['natural', 'vivid', 'game'].includes(s.visualMode) ? s.visualMode : 'natural',
@@ -388,10 +411,12 @@
     if (raw) state = validData(JSON.parse(raw));
   } catch (e) { storageOK = false; }
   let localStateAccountId = myId;
+  let lastRouteCloudSaveAt = 0;
 
   // 2. ฟังก์ชันดึงข้อมูลจาก Cloud
   async function loadOnline() {
     const accountId = myId;
+    const localRouteAtRequest = state.routeUpdatedAt;
     setSyncStatus('syncing', 'กำลังดึงข้อมูล…');
     try {
       const encodedId = encodeURIComponent(accountId);
@@ -413,10 +438,26 @@
       // ถ้าระบบเจอข้อมูลบนคลาวด์ ให้เอามาทับในเครื่องแล้วรีเฟรชทุกส่วนของหน้าจอ
       if (rows && rows.length > 0 && rows[0].data) {
         const cloudState = validData(rows[0].data);
+        const keepLocalPlaces = localStateAccountId === accountId &&
+          (localStorage.getItem(PLACES_PENDING_KEY + accountId) === '1' ||
+            state.placesUpdatedAt > cloudState.placesUpdatedAt);
+        if (keepLocalPlaces) {
+          cloudState.places = state.places;
+          cloudState.placesUpdatedAt = state.placesUpdatedAt;
+        }
+        const keepLocalRoute = localStateAccountId === accountId &&
+          state.routeUpdatedAt > cloudState.routeUpdatedAt;
+        if (keepLocalRoute || (localStateAccountId === accountId && localRouteAtRequest > cloudState.routeUpdatedAt)) {
+          cloudState.routeT = state.routeT;
+          cloudState.routeUpdatedAt = state.routeUpdatedAt;
+        } else {
+          lastRouteCloudSaveAt = cloudState.routeUpdatedAt;
+        }
         const cloudEntryIds = new Set(cloudState.entries.map(entry => entry.id));
         const hasPendingChanges = localStateAccountId === accountId &&
           (localStorage.getItem(CLOUD_PENDING_KEY + accountId) === '1' ||
-            state.entries.some(entry => !cloudEntryIds.has(entry.id)));
+            state.entries.some(entry => !cloudEntryIds.has(entry.id)) ||
+            keepLocalPlaces);
         if (hasPendingChanges) {
           const entriesById = new Map(cloudState.entries.map(entry => [entry.id, entry]));
           state.entries.forEach(entry => {
@@ -430,6 +471,7 @@
         if (hasPendingChanges && !(await saveOnline())) return false;
         
         if (typeof renderEntries === 'function') renderEntries();
+        if (typeof renderSavedPlaces === 'function') renderSavedPlaces();
         if (typeof stats === 'function') stats();
         if (currentView === 'memory' && typeof renderMemory === 'function') renderMemory();
         if (typeof sceneAPI !== 'undefined' && sceneAPI) {
@@ -467,6 +509,7 @@
   async function saveOnline(manual = false) {
     if (isReloading) return false;
     const accountId = myId;
+    const savedRouteAt = state.routeUpdatedAt;
     const payload = JSON.stringify({ id: accountId, data: state });
     if (accountId === myId) setSyncStatus('syncing', 'กำลังซิงก์…');
     try {
@@ -490,9 +533,12 @@
         toast(svgInline('alert') + ' เซฟขึ้นคลาวด์ไม่สำเร็จ (' + res.status + ')');
         return false;
       } else {
-        localStateAccountId = accountId;
-        if (accountId === myId) localStateAccountId = accountId;
+        if (accountId === myId) {
+          localStateAccountId = accountId;
+          lastRouteCloudSaveAt = Math.max(lastRouteCloudSaveAt, savedRouteAt);
+        }
         localStorage.removeItem(CLOUD_PENDING_KEY + accountId);
+        localStorage.removeItem(PLACES_PENDING_KEY + accountId);
         if (accountId === myId) setSyncStatus('synced');
         if (manual) toast(svgInline('check') + ' ซิงก์ข้อมูลขึ้นคลาวด์เรียบร้อยแล้ว');
         return true;
@@ -523,28 +569,30 @@
     }
   }
 
-  // เก็บสำเนาในเครื่องเมื่อออกจากหน้า และดึงข้อมูลใหม่เมื่อกลับมา
+  // เก็บตำแหน่งรถก่อนพักแท็บ แล้วดึงข้อมูลล่าสุดเมื่อกลับมา
   document.addEventListener('visibilitychange', () => {
     if (document.hidden && !isReloading) {
-      persist(false);
+      persist(true);
     } else if (syncStatusState.mode !== 'syncing') {
       loadOnline();
     }
   });
   
-  // ไม่ส่งสำเนาเก่าทับข้อมูลที่อุปกรณ์อื่นอาจเพิ่งบันทึก
+  // ส่ง checkpoint ล่าสุดก่อนปิดหน้า; fetch ใช้ keepalive ใน saveOnline
   window.addEventListener('pagehide', () => {
-    if (!isReloading) persist(false);
+    if (!isReloading) persist(true);
   });
 
   setInterval(() => {
-    if (!document.hidden && syncStatusState.mode !== 'syncing') loadOnline();
-  }, 30000);
+    if (document.hidden || syncStatusState.mode === 'syncing') return;
+    if (isCloudSynced && state.routeUpdatedAt > lastRouteCloudSaveAt) persist(true);
+    else loadOnline();
+  }, 15000);
 
   /* ============================================================================
-   * src/app/04-utils.js
+   * app/04-utils.js
    * ฟังก์ชันช่วยเล็ก ๆ: toast, วันที่ (localDate / prettyDate), moodOf, svgIcon
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   let toastTimer;
@@ -589,9 +637,9 @@
   }
 
   /* ============================================================================
-   * src/app/05-mood-selector.js
+   * app/05-mood-selector.js
    * วันที่หน้าแรก, เลือกอารมณ์ (chooseMood) และสร้างปุ่มอารมณ์
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   $('entryDate').value = localDate();
@@ -643,9 +691,9 @@
   });
 
   /* ============================================================================
-   * src/app/06-navigation.js
+   * app/06-navigation.js
    * สลับหน้า (setView: home / journal / rest / memory), hash routing และปุ่มนำทาง
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   function setView(v) {
@@ -672,13 +720,119 @@
   document.querySelector('.brand').onclick = () => setView('home');
 
   /* ============================================================================
-   * src/app/07-journal-form.js
+   * app/07-journal-form.js
    * ฟอร์มเขียนบันทึก: นับตัวอักษร, ล้างฟอร์ม, บันทึก/แก้ไข (submit) และ stats
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   $('entryText').oninput = () =>
     ($('charCount').textContent = $('entryText').value.length.toLocaleString() + ' / 3,000');
+  let editingPlaceId = null;
+  function markPlacesUpdated() {
+    state.placesUpdatedAt = Math.max(Date.now(), state.placesUpdatedAt + 1);
+    try {
+      localStorage.setItem(PLACES_PENDING_KEY + myId, '1');
+    } catch (e) {
+      console.error('Unable to queue place changes for cloud sync:', e);
+    }
+  }
+  function resetSavedPlaceForm() {
+    editingPlaceId = null;
+    $('savedPlaceForm').reset();
+    $('savedPlaceSubmit').textContent = 'เพิ่มสถานที่';
+    $('savedPlaceCancel').hidden = true;
+  }
+  function renderSavedPlaces() {
+    const list = $('savedPlaceList'),
+      options = $('savedPlaceOptions');
+    if (!list || !options) return;
+    list.replaceChildren();
+    options.replaceChildren();
+    state.places.forEach(place => {
+      const option = document.createElement('option');
+      option.value = place.name;
+      option.label = place.note || place.name;
+      options.append(option);
+
+      const item = document.createElement('article');
+      item.className = 'saved-place-item';
+      const copy = document.createElement('div');
+      copy.className = 'saved-place-copy';
+      const name = document.createElement('strong');
+      name.textContent = place.name;
+      copy.append(name);
+      if (place.note) {
+        const note = document.createElement('span');
+        note.textContent = place.note;
+        copy.append(note);
+      }
+      const actions = document.createElement('div');
+      actions.className = 'saved-place-actions';
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'secondary';
+      edit.textContent = 'แก้ไข';
+      edit.onclick = () => {
+        editingPlaceId = place.id;
+        $('savedPlaceName').value = place.name;
+        $('savedPlaceNote').value = place.note;
+        $('savedPlaceSubmit').textContent = 'บันทึกการแก้ไข';
+        $('savedPlaceCancel').hidden = false;
+        $('savedPlaceName').focus();
+      };
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'secondary danger';
+      remove.textContent = 'ลบ';
+      remove.onclick = () => ask('ลบสถานที่ “' + place.name + '” ออกจากรายการหรือไม่? บันทึกเดิมจะยังคงชื่อสถานที่ไว้', () => {
+        state.places = state.places.filter(item => item.id !== place.id);
+        markPlacesUpdated();
+        const ok = persist();
+        if (editingPlaceId === place.id) resetSavedPlaceForm();
+        renderSavedPlaces();
+        if (ok) toast(isCloudSynced ? 'ลบสถานที่แล้ว · กำลังซิงก์ขึ้นฐานข้อมูล' : 'ลบสถานที่แล้ว · เก็บไว้ในเครื่อง รอซิงก์เมื่อออนไลน์');
+        else toast('ลบสถานที่ไม่สำเร็จ พื้นที่จัดเก็บในเครื่องอาจเต็ม');
+      });
+      actions.append(edit, remove);
+      item.append(copy, actions);
+      list.append(item);
+    });
+    if (!state.places.length) {
+      const empty = document.createElement('p');
+      empty.className = 'saved-place-empty';
+      empty.textContent = 'ยังไม่มีสถานที่ที่บันทึกไว้ เพิ่มสถานที่แรกของคุณได้เลย';
+      list.append(empty);
+    }
+  }
+  $('savedPlaceForm').onsubmit = e => {
+    e.preventDefault();
+    if (!isCloudSynced && syncStatusState.mode === 'syncing')
+      return toast('กำลังตรวจสอบข้อมูลคลาวด์ กรุณารอสักครู่แล้วลองอีกครั้ง');
+    const name = $('savedPlaceName').value.trim(),
+      note = $('savedPlaceNote').value.trim(),
+      duplicate = state.places.some(place =>
+        place.id !== editingPlaceId && place.name.toLocaleLowerCase() === name.toLocaleLowerCase()
+      );
+    if (!name) return toast('กรุณาระบุชื่อสถานที่');
+    if (duplicate) return toast('มีสถานที่ชื่อนี้อยู่แล้ว');
+    if (!editingPlaceId && state.places.length >= 200) return toast('บันทึกสถานที่ได้สูงสุด 200 แห่ง');
+    const place = {
+      id: editingPlaceId || globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).slice(2),
+      name,
+      note
+    };
+    const index = state.places.findIndex(item => item.id === editingPlaceId);
+    if (index >= 0) state.places[index] = place;
+    else state.places.push(place);
+    markPlacesUpdated();
+    const ok = persist();
+    renderSavedPlaces();
+    resetSavedPlaceForm();
+    if (ok) toast(isCloudSynced ? 'บันทึกสถานที่แล้ว · กำลังซิงก์ขึ้นฐานข้อมูล' : 'บันทึกสถานที่แล้ว · เก็บไว้ในเครื่อง รอซิงก์เมื่อออนไลน์');
+    else toast('บันทึกสถานที่ไม่สำเร็จ พื้นที่จัดเก็บในเครื่องอาจเต็ม');
+  };
+  $('savedPlaceCancel').onclick = resetSavedPlaceForm;
+  renderSavedPlaces();
   function clearForm() {
     editing = null;
     $('entryTitle').value = '';
@@ -717,6 +871,7 @@
     const ok = persist();
     stats();
     renderEntries();
+    renderSavedPlaces();
     sceneAPI?.refresh();
     if (currentView === 'memory') renderMemory();
     clearForm();
@@ -734,9 +889,9 @@
   }
 
   /* ============================================================================
-   * src/app/08-journal-list.js
+   * app/08-journal-list.js
    * รายการบันทึก: ค้นหา/กรอง/แสดงผล (renderEntries), แก้ไข (editEntry), ปุ่มเขียนใหม่, ถูกใจ (toggleFav)
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   function renderEntries() {
@@ -858,9 +1013,9 @@
   }
 
   /* ============================================================================
-   * src/app/09-entry-reader.js
+   * app/09-entry-reader.js
    * หน้าต่างอ่านบันทึก (openReader) และปุ่มถูกใจ/แก้ไข/ลบ
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   let readerId = null;
@@ -891,6 +1046,14 @@
     if ($('readerModal').hidden) openModal('readerModal');
   }
   $('rdFav').onclick = () => toggleFav(readerId);
+  $('rdVisit').onclick = () => {
+    const entry = state.entries.find(x => x.id === readerId);
+    if (entry) revisitMemory(entry);
+  };
+  $('rdPostcard').onclick = () => {
+    const entry = state.entries.find(x => x.id === readerId);
+    if (entry) revisitMemory(entry, true);
+  };
   $('rdEdit').onclick = () => {
     const e = state.entries.find(x => x.id === readerId);
     if (!e) return;
@@ -915,9 +1078,9 @@
   };
 
   /* ============================================================================
-   * src/app/10-modal-system.js
+   * app/10-modal-system.js
    * ระบบหน้าต่างป๊อปอัป: openModal / closeModal, ปิดด้วย overlay หรือ Esc และกล่องยืนยัน (ask)
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   const focusReturns = new Map();
@@ -973,9 +1136,9 @@
   };
 
   /* ============================================================================
-   * src/app/11-settings-data.js
+   * app/11-settings-data.js
    * การตั้งค่า (ลดการเคลื่อนไหว / ประหยัดภาพ) และส่งออก/นำเข้า/ลบข้อมูล JSON
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   function settings() {
@@ -1149,7 +1312,9 @@
       const imported = validData(JSON.parse(await file.text()));
       ask('แทนที่ข้อมูลในเครื่องนี้ด้วย ' + imported.entries.length + ' บันทึกจากไฟล์สำรองหรือไม่?', () => {
         state = imported;
+        markPlacesUpdated();
         const ok = persist();
+        renderSavedPlaces();
         clearForm();
         chooseMood(state.mood, false);
         stats();
@@ -1166,22 +1331,27 @@
     }
   };
   $('clearBtn').onclick = () =>
-    ask('ลบบันทึกและจำนวนโคมทั้งหมดในเครื่องนี้อย่างถาวรหรือไม่?', () => {
+    ask('ลบบันทึก สถานที่ส่วนตัว และจำนวนโคมทั้งหมดในเครื่องนี้อย่างถาวรหรือไม่?', () => {
       state.entries = [];
+      state.places = [];
+      markPlacesUpdated();
       state.lanterns = 0;
       clearForm();
       const ok = persist();
+      resetSavedPlaceForm();
+      renderSavedPlaces();
       stats();
       renderEntries();
       sceneAPI?.refresh();
       if (currentView === 'memory') renderMemory();
       if (ok) toast('ล้างข้อมูลแล้ว พร้อมเริ่มหน้าใหม่');
+      else toast('ล้างข้อมูลไม่สำเร็จ พื้นที่จัดเก็บในเครื่องอาจเต็ม');
     });
 
   /* ============================================================================
-   * src/app/12-lantern-night.js
+   * app/12-lantern-night.js
    * โคมลอย (วางความรู้สึก) และปุ่มกลางวัน/กลางคืน
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   function lanternDialog() {
@@ -1277,9 +1447,9 @@
   };
 
   /* ============================================================================
-   * src/app/13-nature-sound.js
+   * app/13-nature-sound.js
    * เสียงธรรมชาติบำบัด (ลม สายน้ำ นก/เรไร ฝน) ด้วย Web Audio
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   /* ===== 1. ระบบเสียงธรรมชาติบำบัด (Nature Sounds: ลมภูเขา · สายน้ำ · นก/เรไร · เสียงฝนตามฉาก) ===== */
@@ -1289,8 +1459,11 @@
     natureMaster = null,
     rainGainNode = null,
     birdBus = null,
+    placeBus = null,
     windGainN = null,
-    streamGainN = null;
+    streamGainN = null,
+    riverAmbienceGainN = null,
+    riverAmbienceProximity = 0;
   const MIXV = Object.assign({ wind: 1, water: 1, birds: 1, rain: 1, music: 1 }, (() => { try { return JSON.parse(localStorage.getItem('road-of-days-mix')) || {}; } catch (e) { return {}; } })());
   function startNatureLoop() {
     clearInterval(birdTimer);
@@ -1448,6 +1621,9 @@
         birdBus = audioCtx.createGain();
         birdBus.gain.value = MIXV.birds;
         birdBus.connect(natureMaster);
+        placeBus = audioCtx.createGain();
+        placeBus.gain.value = 0.8;
+        placeBus.connect(natureMaster);
 
         // สร้าง Buffer เสียงลมภูเขาและสายน้ำ (Stereo Brown/Pink Noise 6 วินาที)
         const len = audioCtx.sampleRate * 6,
@@ -1514,6 +1690,28 @@
         rainGainNode.gain.value = 0.0001;
         rainSrc.connect(rainFlt).connect(rainWarm).connect(rainGainNode).connect(natureMaster);
         rainSrc.start();
+
+        // เสียงน้ำกระทบตลิ่งเบา ๆ เพิ่มเฉพาะช่วงที่อยู่ใกล้แม่น้ำ
+        const riverSrc = audioCtx.createBufferSource();
+        riverSrc.buffer = b;
+        riverSrc.loop = true;
+        riverSrc.playbackRate.value = 0.72;
+        const riverHigh = audioCtx.createBiquadFilter();
+        riverHigh.type = 'highpass';
+        riverHigh.frequency.value = 150;
+        const riverLow = audioCtx.createBiquadFilter();
+        riverLow.type = 'lowpass';
+        riverLow.frequency.value = 570;
+        const riverLfo = audioCtx.createOscillator(),
+          riverLfoGain = audioCtx.createGain();
+        riverLfo.frequency.value = 0.14;
+        riverLfoGain.gain.value = 75;
+        riverLfo.connect(riverLfoGain).connect(riverLow.frequency);
+        riverLfo.start();
+        riverAmbienceGainN = audioCtx.createGain();
+        riverAmbienceGainN.gain.value = 0.0001;
+        riverSrc.connect(riverHigh).connect(riverLow).connect(riverAmbienceGainN).connect(placeBus);
+        riverSrc.start();
       }
       soundOn = !soundOn;
       if (soundOn) {
@@ -1538,9 +1736,9 @@
   });
 
   /* ============================================================================
-   * src/app/14-ambient-music.js
+   * app/14-ambient-music.js
    * เพลงบรรเลงผ่อนคลาย (เปียโนนุ่ม ๆ + Warm Pad) ปรับตามอารมณ์ ด้วย Web Audio
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   /* ===== 2. ระบบเพลงบรรเลงผ่อนคลาย (Ambient Music: เปียโนผ้านุ่ม ๆ · Warm Pad · ปรับตามอารมณ์) ===== */
@@ -1776,9 +1974,9 @@
   });
 
   /* ============================================================================
-   * src/app/15-breath.js
+   * app/15-breath.js
    * มุมพักใจ: แบบฝึกหายใจ
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   let breathTimer = null,
@@ -1819,9 +2017,9 @@
   };
 
   /* ============================================================================
-   * src/app/16-route-ui.js
+   * app/16-route-ui.js
    * ป้ายชื่อสถานที่ตามตำแหน่งบนเส้นทาง (updateRouteUI)
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   function updateRouteUI() {
@@ -1841,14 +2039,13 @@
   }
 
   /* ============================================================================
-   * src/app/17-memory-calendar.js
+   * app/17-memory-calendar.js
    * หน้าความทรงจำ: ปฏิทิน รายการตามวัน และแผนที่เส้นทางความทรงจำ
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   let viewYear = new Date().getFullYear(),
     viewMonth = new Date().getMonth(),
-    selectedStop = null,
     selectedDay = null;
   const routeStops = ROUTE.map(s => ({ name: s.name, t: s.t }));
   function dayKey(y, m, d) {
@@ -1909,19 +2106,22 @@
       return;
     }
 
-    entries.forEach(e => {
+    entries.forEach((e, index) => {
       const mood = moodOf(e.mood),
         card = document.createElement('article');
       card.className = 'day-story';
       card.style.setProperty('--story-color', mood.color);
       const top = document.createElement('div');
       top.className = 'day-story-top';
+      const sequence = document.createElement('span');
+      sequence.className = 'day-story-index';
+      sequence.textContent = 'MOMENT ' + String(index + 1).padStart(2, '0');
       const moodTag = document.createElement('span');
       moodTag.className = 'day-mood';
       moodTag.style.setProperty('--mood-color', mood.color);
       moodTag.innerHTML = svgIcon(mood.icon);
       moodTag.append(document.createTextNode(mood.label));
-      top.append(moodTag);
+      top.append(sequence, moodTag);
       if (e.place) {
         const place = document.createElement('span');
         place.className = 'day-place';
@@ -1938,9 +2138,34 @@
       read.className = 'day-read';
       read.textContent = 'อ่านเรื่องราวเต็ม ๆ  →';
       read.onclick = () => openReader(e.id);
-      card.append(top, title, excerpt, read);
+      const actions = document.createElement('div');
+      actions.className = 'day-story-actions';
+      const visit = document.createElement('button');
+      visit.type = 'button';
+      visit.className = 'day-read';
+      visit.textContent = 'กลับไปดูจุดนี้';
+      visit.onclick = () => revisitMemory(e);
+      const postcard = document.createElement('button');
+      postcard.type = 'button';
+      postcard.className = 'day-read';
+      postcard.textContent = 'ทำโปสการ์ด';
+      postcard.onclick = () => revisitMemory(e, true);
+      actions.append(read, visit, postcard);
+      card.append(top, title, excerpt, actions);
       target.append(card);
     });
+
+    const keepGoing = document.createElement('div');
+    keepGoing.className = 'day-keep-going';
+    const keepCopy = document.createElement('div');
+    keepCopy.innerHTML = '<strong>ทุกเรื่องเล็ก ๆ มีความหมาย</strong><span>แวะเติมอีกหนึ่งหน้าลงในสมุดบันทึกเล่มนี้</span>';
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'day-write';
+    add.textContent = '＋ เพิ่มเรื่องราว';
+    add.onclick = () => startMemoryEntry(selectedDay);
+    keepGoing.append(keepCopy, add);
+    target.append(keepGoing);
   }
   function updateMemoryStats() {
     const stats = $('memoryStats');
@@ -2054,120 +2279,27 @@
     document.querySelector('.side').classList.add('open');
     setTimeout(() => $('entryTitle').focus({ preventScroll: true }), 300);
   }
-  function drawRouteMemory() {
-    const cv = $('memoryRoute'),
-      ctx = cv.getContext('2d'),
-      w = cv.width,
-      h = cv.height;
-    ctx.clearRect(0, 0, w, h);
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(40, 240);
-    ctx.bezierCurveTo(180, 60, 300, 280, 460, 150);
-    ctx.bezierCurveTo(580, 60, 680, 230, 860, 60);
-    ctx.bezierCurveTo(820, 160, 740, 250, 640, 235);
-    ctx.bezierCurveTo(550, 220, 550, 80, 470, 90);
-    ctx.lineWidth = 22;
-    ctx.strokeStyle = '#fef8e8';
-    ctx.stroke();
-    ctx.lineWidth = 10;
-    ctx.strokeStyle = '#75a47d';
-    ctx.stroke();
-    const point = t => {
-      if (t <= T1) {
-        const u = Math.max(0, Math.min(1, (t - T0) / (T1 - T0))),
-          a = u < 0.5 ? u * 2 : (u - 0.5) * 2;
-        return u < 0.5
-          ? [
-              (1 - a) ** 3 * 40 + 3 * (1 - a) ** 2 * a * 180 + 3 * (1 - a) * a * a * 300 + a ** 3 * 460,
-              (1 - a) ** 3 * 240 + 3 * (1 - a) ** 2 * a * 60 + 3 * (1 - a) * a * a * 280 + a ** 3 * 150
-            ]
-          : [
-              (1 - a) ** 3 * 460 + 3 * (1 - a) ** 2 * a * 580 + 3 * (1 - a) * a * a * 680 + a ** 3 * 860,
-              (1 - a) ** 3 * 150 + 3 * (1 - a) ** 2 * a * 60 + 3 * (1 - a) * a * a * 230 + a ** 3 * 60
-            ];
-      }
-      const u = Math.max(0, Math.min(1, (t - (t <= T2 ? T1 : T2)) / (t <= T2 ? T2 - T1 : T3 - T2))),
-        start = t <= T2 ? [860, 60] : [640, 235],
-        c1 = t <= T2 ? [820, 160] : [550, 220],
-        c2 = t <= T2 ? [740, 250] : [550, 80],
-        end = t <= T2 ? [640, 235] : [470, 90],
-        inv = 1 - u;
-      return [
-        inv ** 3 * start[0] + 3 * inv ** 2 * u * c1[0] + 3 * inv * u ** 2 * c2[0] + u ** 3 * end[0],
-        inv ** 3 * start[1] + 3 * inv ** 2 * u * c1[1] + 3 * inv * u ** 2 * c2[1] + u ** 3 * end[1]
-      ];
-    };
-    routeStops.forEach(s => {
-      const [x, y] = point(s.t);
-      ctx.beginPath();
-      ctx.arc(x, y, 14, 0, Math.PI * 2);
-      ctx.fillStyle = '#fff';
-      ctx.fill();
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = '#376951';
-      ctx.stroke();
-      ctx.fillStyle = '#315c45';
-      ctx.font = 'bold 13px Noto Sans Thai,sans-serif';
-      ctx.fillText(s.name, x + 16, y + 5);
-    });
-    state.entries.forEach(e => {
-      const [x, y] = point(e.routeT);
-      ctx.fillStyle = moodOf(e.mood).color;
-      ctx.fillRect(x - 8, y - 8, 16, 16);
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(x - 8, y - 8, 16, 16);
-    });
-    return point;
-  }
-  function renderRouteMemory() {
-    const point = drawRouteMemory(),
-      bar = $('stopButtons');
-    bar.replaceChildren();
-    const all = document.createElement('button');
-    all.textContent = 'ทุกจุดแวะ';
-    all.classList.toggle('active', !selectedStop);
-    all.onclick = () => {
-      selectedStop = null;
-      renderRouteMemory();
-    };
-    bar.append(all);
-    routeStops.forEach(s => {
-      const b = document.createElement('button');
-      b.textContent = s.name;
-      b.classList.toggle('active', selectedStop === s.name);
-      b.onclick = () => {
-        selectedStop = s.name;
-        renderRouteMemory();
-      };
-      bar.append(b);
-    });
-    const entries = selectedStop
-      ? state.entries.filter(e => {
-          const s = routeStops.reduce((a, b) =>
-            Math.abs(a.t - e.routeT) < Math.abs(b.t - e.routeT) ? a : b
-          );
-          return s.name === selectedStop;
-        })
-      : state.entries;
-    listMemory($('stopEntries'), entries);
-    $('memoryRoute').onclick = ev => {
-      const r = ev.currentTarget.getBoundingClientRect(),
-        x = ((ev.clientX - r.left) * 900) / r.width,
-        y = ((ev.clientY - r.top) * 300) / r.height;
-      const match = state.entries
-        .map(e => {
-          const p = point(e.routeT);
-          return { e, d: Math.hypot(p[0] - x, p[1] - y) };
-        })
-        .sort((a, b) => a.d - b.d)[0];
-      if (match && match.d < 28) openReader(match.e.id);
-    };
+  function revisitMemory(entry, makePostcard = false) {
+    if (!$('readerModal').hidden) closeModal('readerModal');
+    location.hash = 'home';
+    setView('home');
+    if (!sceneAPI?.goToRoute || !sceneAPI.goToRoute(entry.routeT)) {
+      toast('ฉากกำลังเตรียมพร้อม กรุณาลองอีกครั้ง');
+      return;
+    }
+    if (makePostcard) {
+      setTimeout(() => {
+        document.dispatchEvent(new CustomEvent('road-days:postcard', { detail: { entry } }));
+      }, 250);
+    } else {
+      const stop = routeStops.reduce((a, b) =>
+        Math.abs(a.t - entry.routeT) < Math.abs(b.t - entry.routeT) ? a : b
+      );
+      toast('กลับมายัง “' + (entry.place || stop.name) + '” · ' + prettyDate(entry.date));
+    }
   }
   function renderMemory() {
     renderCalendar();
-    //renderRouteMemory();
   }
   $('memoryOpen').onclick = () => {
     location.hash = 'memory';
@@ -2199,9 +2331,9 @@
   };
 
   /* ============================================================================
-   * src/app/18-scene-buttons.js
+   * app/18-scene-buttons.js
    * ปุ่มควบคุมฉาก: ซูม ความเร็วรถ และทางลัดเปิดหน้าต่าง ๆ
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   document.querySelectorAll('[data-go-home]').forEach(
@@ -2237,9 +2369,9 @@
   };
 
   /* ============================================================================
-   * src/app/19-stories.js
+   * app/19-stories.js
    * เรื่องเล่าระหว่างทาง (STORIES), ป๊อปอัป และปุ่มเปิด/ปิด
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   let storiesOn = true;
@@ -2431,9 +2563,9 @@
   };
 
   /* ============================================================================
-   * src/app/20-memory-peek-bubble.js
+   * app/20-memory-peek-bubble.js
    * การ์ดทบทวนความทรงจำสุ่ม (peek), แผงด้านข้างบนมือถือ และฟองอารมณ์ลอย
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   let peekId = null,
@@ -2554,9 +2686,9 @@
   }, 28000);
 
   /* ============================================================================
-   * src/app/21-dock-fab.js
+   * app/21-dock-fab.js
    * ตำแหน่ง dock ด้านล่างฉาก และปุ่มลัดลอย (FAB)
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
   {
@@ -2655,10 +2787,11 @@
  
 
   async function init3D() {
+    /* Scene setup and model source. This file is inserted into the shared app closure during build. */
     /* ============================================================================
-     * src/scene/01-renderer-setup.js
+     * scene/01-renderer-setup.js
      * โหลด three.js จาก CDN, ตั้งระดับคุณภาพกราฟิก และสร้าง WebGLRenderer
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     let THREE;
@@ -2740,6 +2873,8 @@
     }
     renderer.setClearColor(0xc3dbd5);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
     renderer.shadowMap.type = THREE.PCFShadowMap; // เปลี่ยนเป็นเงาแบบปกติ เบาเครื่องกว่ามาก
     renderer.domElement.setAttribute(
       'aria-label',
@@ -2749,14 +2884,14 @@
     host.prepend(renderer.domElement);
 
     /* ============================================================================
-     * src/scene/02-scene-lights-ground.js
+     * scene/02-scene-lights-ground.js
      * สร้าง scene / camera / แสง, วัสดุหลัก (mat) และพื้นดินพร้อมลายหญ้า
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xc3dbd5);
-    scene.fog = new THREE.Fog(0xc3dbd5, 37, 110);
+    scene.fog = new THREE.Fog(0xc3dbd5, 44, 138);
     const camera = new THREE.PerspectiveCamera(40, 1, 0.3, 560);
     const ambient = new THREE.HemisphereLight(0xfffae7, 0x7d9265, 2.6);
     scene.add(ambient);
@@ -2882,6 +3017,53 @@
       rubber = mat(0x3d4944),
       hub = mat(0xc8d3bd),
       orange = mat(0xd9ad70);
+    function makeSurfaceNormalMap(pattern) {
+      const size = 128,
+        heightAt = (u, v) => {
+          const tau = Math.PI * 2;
+          if (pattern === 'earth') {
+            return (
+              Math.sin(tau * (5 * u + 2 * v)) * 0.012 +
+              Math.sin(tau * (13 * u - 9 * v)) * 0.006 +
+              Math.cos(tau * 17 * v) * 0.004
+            );
+          }
+          return (
+            Math.sin(tau * (4 * u + 5 * v)) * 0.009 +
+            Math.sin(tau * (11 * u - 7 * v)) * 0.005 +
+            Math.cos(tau * (15 * u + 2 * v)) * 0.003
+          );
+        },
+        data = new Uint8Array(size * size * 4);
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          const u = x / size,
+            v = y / size,
+            dx = (heightAt(u + 1 / size, v) - heightAt(u - 1 / size, v)) * size * 0.75,
+            dy = (heightAt(u, v + 1 / size) - heightAt(u, v - 1 / size)) * size * 0.75,
+            nx = -dx,
+            ny = -dy,
+            invLength = 1 / Math.hypot(nx, ny, 1),
+            offset = (y * size + x) * 4;
+          data[offset] = Math.round((nx * invLength * 0.5 + 0.5) * 255);
+          data[offset + 1] = Math.round((ny * invLength * 0.5 + 0.5) * 255);
+          data[offset + 2] = Math.round((invLength * 0.5 + 0.5) * 255);
+          data[offset + 3] = 255;
+        }
+      }
+      const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+      texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+      texture.magFilter = THREE.LinearFilter;
+      texture.minFilter = THREE.LinearMipmapLinearFilter;
+      texture.generateMipmaps = true;
+      texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+      texture.needsUpdate = true;
+      return texture;
+    }
+    const grassNormalMap = makeSurfaceNormalMap('grass'),
+      earthNormalMap = makeSurfaceNormalMap('earth');
+    groundMat.normalMap = grassNormalMap;
+    groundMat.normalScale = new THREE.Vector2(0.24, 0.24);
     {
       const gc = document.createElement('canvas');
       gc.width = gc.height = 256;
@@ -2936,9 +3118,9 @@
     scene.add(ground);
 
     /* ============================================================================
-     * src/scene/03-route-road.js
+     * scene/03-route-road.js
      * เส้นทางถนนหลัก (CatmullRom + RouteX) และผิวถนน/ขอบถนน (strip)
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     const route0 = new THREE.CatmullRomCurve3(
@@ -3032,15 +3214,21 @@
     };
     function strip(width, y, material) {
       const verts = [],
+        uvs = [],
         indices = [],
         N = coarsePointer ? 1800 : 4200; // ถนนยาวขึ้นหลังต่อเส้นทางขึ้นดอย: เพิ่มท่อนถนนให้ขอบโค้งเนียน ไม่เป็นเหลี่ยม
+      let distance = 0,
+        previousPoint = null;
       for (let i = 0; i <= N; i++) {
         const p = route.getPoint(i / N),
           t = route.getTangent(i / N),
           n = new THREE.Vector3(-t.z, 0, t.x);
+        if (previousPoint) distance += p.distanceTo(previousPoint);
+        previousPoint = p;
         for (let sign of [-1, 1]) {
           const v = p.clone().addScaledVector(n, (width / 2) * sign);
           verts.push(v.x, p.y + y, v.z);
+          uvs.push((sign * width) / 8, distance / 4);
         }
         if (i < N) {
           let a = 2 * i;
@@ -3049,6 +3237,7 @@
       }
       let g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+      g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
       g.setIndex(indices);
       g.computeVertexNormals();
       const mesh = new THREE.Mesh(g, material);
@@ -3176,9 +3365,9 @@
     }
 
     /* ============================================================================
-     * src/scene/05-basic-shapes.js
+     * scene/05-basic-shapes.js
      * ตัวสร้างรูปทรงพื้นฐาน box / sphere
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     // สร้างแม่แบบแค่ชิ้นเดียว ประหยัด RAM และ CPU มหาศาล
@@ -3247,9 +3436,9 @@
     }
 
     /* ============================================================================
-     * src/scene/08-placement-utils.js
+     * scene/08-placement-utils.js
      * ตัวสุ่มแบบกำหนดค่า (rand), โซนห้ามวางของ (spotOK) และ offRoad สำหรับวางของริมถนน
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     let seed = 27;
@@ -3266,7 +3455,7 @@
       routePts.push(q.x, q.z);
     }
     const taken = [];
-    function spotOK(x, z, r) {
+    function spotOK(x, z, r, ignoreTempleReservations = false) {
       const lim = (ROAD_HALF + r) ** 2;
       for (let i = 0; i < routePts.length; i += 2) {
         const dx = routePts[i] - x,
@@ -3274,6 +3463,7 @@
         if (dx * dx + dz * dz < lim) return false;
       }
       for (const o of taken) {
+        if (ignoreTempleReservations && o[3] === 'temple') continue;
         const dx = o[0] - x,
           dz = o[1] - z,
           rr = o[2] + r;
@@ -3285,6 +3475,15 @@
       const p = route.getPoint(t),
         tn = route.getTangent(t);
       return { p, tn, x: p.x - tn.z * off, z: p.z + tn.x * off };
+    }
+    const TEMPLE_T_VALUES = [0.14, 0.7],
+      TEMPLE_SIDE_PREFERENCES = [-1, -1],
+      templeSiteCenters = TEMPLE_T_VALUES.map((t, index) => {
+        const side = TEMPLE_SIDE_PREFERENCES[index];
+        return { ...offRoad(t, side * 30), t, side, offset: 30 };
+      });
+    function clearOfTempleSites(x, z, clearance) {
+      return templeSiteCenters.every(site => Math.hypot(site.x - x, site.z - z) >= clearance);
     }
 
     /* แม่น้ำสายกว้างไหลเลียบหลังสวนผลไม้ (ฝั่งนอกโค้งถนน t ≈ 0.712–0.802)
@@ -3335,11 +3534,30 @@
         taken.push([q.x, q.z, q.w + 2.8]);
       }
     }
+    const placedTempleSites = [];
+    for (const site of templeSiteCenters) {
+      let selected = null;
+      for (const side of [site.side, -site.side]) {
+        for (let step = 0; step < 14; step++) {
+          const offset = 42 + step * 4,
+            candidate = offRoad(site.t, side * offset);
+          if (!spotOK(candidate.x, candidate.z, 24)) continue;
+          if (placedTempleSites.some(other => Math.hypot(other.x - candidate.x, other.z - candidate.z) < 56)) continue;
+          selected = { ...candidate, side, offset };
+          break;
+        }
+        if (selected) break;
+      }
+      if (!selected) throw new Error(`Unable to reserve temple site at route t=${site.t}`);
+      Object.assign(site, selected);
+      placedTempleSites.push(site);
+      taken.push([site.x, site.z, 34, 'temple']);
+    }
 
     /* ============================================================================
-     * src/scene/09-shape-helpers.js
+     * scene/09-shape-helpers.js
      * ตัวช่วยสร้างรูปทรง ball / cyl และวัสดุ sm2
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     const SPH = new THREE.SphereGeometry(1, 8, 6),
@@ -3370,9 +3588,9 @@
     }
 
     /* ============================================================================
-     * src/scene/10-road-signs.js
+     * scene/10-road-signs.js
      * ป้ายริมทาง: ป้ายบอกทาง ป้ายเตือน ป้ายจำกัดความเร็ว หลักกิโลเมตร
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     /* roadside signs */
@@ -3679,9 +3897,9 @@
     scene.add(wires2);
 
     /* ============================================================================
-     * src/scene/11-trees.js
+     * scene/11-trees.js
      * ต้นไม้ริมทาง (tree, blob) และการสุ่มวางต้นไม้
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
 
@@ -3727,8 +3945,8 @@
 
 
     /* trees: kept clear of the road */
-    treeMat.flatShading = false;
-    treeMat2.flatShading = false;
+    treeMat.flatShading = true;
+    treeMat2.flatShading = true;
     const rt = (() => {
         let s = 555;
         return () => {
@@ -3753,33 +3971,38 @@
 
     // ประกาศตัวแปรใบไม้และฐานต้นไม้กลับมาให้ครบ (แก้อาการ leafGeo is not defined)
     const leafGeo = new THREE.IcosahedronGeometry(1, 0),
-      discM = new THREE.MeshBasicMaterial({
-        color: 0x2d4a36,
+      shadowCanvas = document.createElement('canvas'),
+      shadowContext = shadowCanvas.getContext('2d');
+    shadowCanvas.width = shadowCanvas.height = 128;
+    const shadowGradient = shadowContext.createRadialGradient(64, 64, 4, 64, 64, 64);
+    shadowGradient.addColorStop(0, 'rgba(32, 45, 31, 0.42)');
+    shadowGradient.addColorStop(0.38, 'rgba(32, 45, 31, 0.24)');
+    shadowGradient.addColorStop(1, 'rgba(32, 45, 31, 0)');
+    shadowContext.fillStyle = shadowGradient;
+    shadowContext.fillRect(0, 0, 128, 128);
+    const treeShadowTexture = new THREE.CanvasTexture(shadowCanvas);
+    treeShadowTexture.colorSpace = THREE.SRGBColorSpace;
+    const discM = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        map: treeShadowTexture,
         transparent: true,
-        opacity: 0.2,
         depthWrite: false
       }),
       discGeo = new THREE.CircleGeometry(1, 20),
-      _pineConeGeo = new THREE.ConeGeometry(1, 1.05, 8),
-      _pineTipGeo = new THREE.ConeGeometry(0.16, 0.5, 7);
+      _pineBranchGeo = new THREE.CylinderGeometry(0.035, 0.075, 1, 5),
+      _pineFoliageGeo = new THREE.IcosahedronGeometry(1, 0),
+      _pineTipGeo = new THREE.ConeGeometry(0.13, 0.72, 6),
+      _pineMats = [0x386b48, 0x4b8053, 0x63925c].map(color => sm2(color));
     const TREE_BATCH_SIZE = 36,
       treeBatches = new Map();
 
-    function blob(r, m, x, y, z, p, sy = 0.85, cast = false) {
-      const s = new THREE.Mesh(leafGeo, m);
-      s.position.set(x, y, z);
-      s.scale.set(r * (0.88 + rt() * 0.24), r * sy, r * (0.88 + rt() * 0.24));
-      s.rotation.set(rt() * 3, rt() * 3, rt() * 3);
-      s.castShadow = cast;
-      p.add(s);
-      return s;
-    }
-    function tree(x, z, scale = 1) {
+    const broadBranchGeo = new THREE.CylinderGeometry(0.045, 0.095, 1, 5);
+    function tree(x, z, scale = 1, species = 'mixed') {
       const g = new THREE.Group();
       g.position.set(x, 0, z);
       g.scale.set(scale, scale * (0.9 + rt() * 0.35), scale);
       g.rotation.y = rand() * 6;
-      const broad = rand() > 0.52,
+      const broad = species === 'broadleaf' || (species !== 'pine' && rand() > 0.52),
         d = new THREE.Mesh(discGeo, discM);
       d.rotation.x = -Math.PI / 2;
       d.position.y = 0.02;
@@ -3788,56 +4011,82 @@
       cyl(0.17, 0.27, 0.3, barkD, 0, 0.12, 0, g);
       cyl(0.1, 0.17, 1.5, trunkMat, 0, 0.75, 0, g);
       if (broad) {
-        for (const a of [0, 2.1, 4.2])
-          cyl(
-            0.03,
-            0.065,
-            0.9,
-            bark,
-            Math.cos(a) * 0.3,
-            1.75,
-            Math.sin(a) * 0.3,
-            g,
-            Math.sin(a) * 0.7,
-            -Math.cos(a) * 0.7
-          );
-        const f = rt() < 0.25 ? bloomM[Math.floor(rt() * 3)] : null,
-          wd = 1 + rt() * 0.35;
-        for (const q of [
-          [1.05, 0, 2.0, 0, treeMat, true],
-          [0.82, 0.6 * wd, 1.8, 0.18, treeMat, false],
-          [0.8, -0.56 * wd, 1.75, -0.22, treeMat, false],
-          [0.76, 0.08, 1.72, -0.6 * wd, treeMat, false],
-          [0.74, -0.05, 1.68, 0.58, treeMat, false],
-          [0.72, 0.24, 2.52, 0.1, treeMat2, false],
-          [0.64, -0.26, 2.45, -0.1, treeMat2, false]
-        ])
-          blob(q[0], q[4], q[1], q[2], q[3], g, 0.85, q[5]);
-        if (f)
-          for (let i = 0; i < 4; i++) {
-            const a = rt() * 6.28,
-              h = 1.9 + rt() * 1.1,
-              r = 0.8 + rt() * 0.3;
-            ball(0.09, f, Math.cos(a) * r, h, Math.sin(a) * r, g);
+        const levels = [
+          { y: 1.58, length: 1.15 },
+          { y: 2.12, length: 0.84 },
+          { y: 2.58, length: 0.52 }
+        ];
+        levels.forEach((level, li) => {
+          for (let b = 0; b < 4; b++) {
+            const angle = (b / 4) * Math.PI * 2 + li * 0.47 + rt() * 0.14,
+              dir = new THREE.Vector3(Math.cos(angle), 0.2 + rt() * 0.12, Math.sin(angle)).normalize(),
+              length = level.length * (0.88 + rt() * 0.24),
+              start = new THREE.Vector3(0, level.y, 0),
+              end = start.clone().addScaledVector(dir, length),
+              branch = new THREE.Mesh(broadBranchGeo, bark);
+            branch.position.copy(start).lerp(end, 0.5);
+            branch.scale.y = length;
+            branch.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+            branch.castShadow = li === 0;
+            g.add(branch);
+
+            const foliage = new THREE.Mesh(leafGeo, rt() > 0.5 ? treeMat2 : treeMat);
+            foliage.position.copy(end);
+            foliage.position.y += (rt() - 0.5) * 0.14;
+            foliage.scale.set(0.7 + rt() * 0.12, 0.2 + rt() * 0.04, 0.27 + rt() * 0.06);
+            foliage.rotation.y = angle + (rt() - 0.5) * 0.45;
+            foliage.rotation.z = -dir.y * 0.55;
+            foliage.castShadow = li === 0;
+            g.add(foliage);
           }
+        });
+        if (rt() < 0.25) {
+          const flower = bloomM[Math.floor(rt() * bloomM.length)];
+          for (let i = 0; i < 3; i++) {
+            const a = (i / 3) * Math.PI * 2 + rt() * 0.5,
+              blossom = new THREE.Mesh(leafGeo, flower);
+            blossom.position.set(Math.cos(a) * 0.95, 2.3 + rt() * 0.7, Math.sin(a) * 0.95);
+            blossom.scale.set(0.17, 0.12, 0.15);
+            g.add(blossom);
+          }
+        }
       } else {
-        const tiers = 4 + Math.floor(rt() * 2),
-          topY = 1.4 + tiers * 0.5;
-        // หดความสูงของแกนลำต้นลง เพื่อไม่ให้แทงทะลุยอดใบสนออกมา
-        cyl(0.045, 0.14, topY - 0.2, trunkMat, 0, (topY - 0.2) / 2, 0, g);
+        const tiers = 6 + Math.floor(rt() * 3),
+          tierSpacing = 0.48,
+          topY = 1.55 + (tiers - 1) * tierSpacing + 0.82;
+        cyl(0.045, 0.14, topY, trunkMat, 0, topY / 2, 0, g);
         cyl(0.14, 0.2, 0.5, barkD, 0, 0.25, 0, g);
         for (let j = 0; j < tiers; j++) {
-          const r = 1.2 - j * (0.98 / tiers),
-            c = new THREE.Mesh(_pineConeGeo, j % 2 ? treeMat2 : treeMat);
-          c.position.set((rt() - 0.5) * 0.06, 1.45 + j * 0.5, (rt() - 0.5) * 0.06);
-          c.scale.set(r, 1, r);
-          c.rotation.y = rt() * 3;
-          c.rotation.z = (rt() - 0.5) * 0.08;
-          c.castShadow = j === 0;
-          g.add(c);
+          const progress = j / Math.max(1, tiers - 1),
+            branchLength = 1.42 - progress * 0.72;
+          for (let b = 0; b < 6; b++) {
+            const angle = (b / 6) * Math.PI * 2 + j * 0.29 + (rt() - 0.5) * 0.12,
+              lift = (progress > 0.72 ? 0.24 : -0.16) + (rt() - 0.5) * 0.1,
+              dir = new THREE.Vector3(Math.cos(angle), lift, Math.sin(angle)).normalize(),
+              length = branchLength * (0.9 + rt() * 0.2),
+              rootX = Math.cos(angle) * 0.08,
+              rootZ = Math.sin(angle) * 0.08,
+              base = new THREE.Vector3(rootX, 1.55 + j * tierSpacing, rootZ),
+              end = base.clone().addScaledVector(dir, length),
+              mid = base.clone().lerp(end, 0.53),
+              branch = new THREE.Mesh(_pineBranchGeo, bark);
+            branch.position.copy(mid);
+            branch.scale.set(0.72, length, 0.72);
+            branch.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+            branch.castShadow = j < 2;
+            g.add(branch);
+
+            const foliage = new THREE.Mesh(_pineFoliageGeo, _pineMats[(j + b) % _pineMats.length]);
+            foliage.position.copy(end).addScaledVector(dir, 0.04);
+            foliage.scale.set(length * 0.53, 0.16 + rt() * 0.04, 0.28 + rt() * 0.06);
+            foliage.rotation.y = angle;
+            foliage.rotation.z = -dir.y * 0.45;
+            foliage.castShadow = j < 2;
+            g.add(foliage);
+          }
         }
-        const tip = new THREE.Mesh(_pineTipGeo, treeMat2);
-        tip.position.y = 1.45 + tiers * 0.5 + 0.1;
+        const tip = new THREE.Mesh(_pineTipGeo, _pineMats[1]);
+        tip.position.y = topY;
         g.add(tip);
       }
 
@@ -3876,10 +4125,10 @@
 
     // 0.3 ร้านกาแฟ Slow Bar ริมทาง (Drip Coffee Hut)
     if (window.ROD_Models && window.ROD_Models.createCoffeeHut) {
-      const cofT = 0.36;
-      const cofO = offRoad(cofT, -8.5);
-      taken.push([cofO.x, cofO.z, 6]);
-      window.ROD_Models.createCoffeeHut(THREE, scene, cofO.x, cofO.z, Math.atan2(cofO.tn.z, -cofO.tn.x));
+      const cofT = tAt(98);
+      const cofO = offRoad(cofT, -13);
+      taken.push([cofO.x, cofO.z, 10]);
+      window.ROD_Models.createCoffeeHut(THREE, scene, cofO.x, cofO.z, Math.atan2(-cofO.tn.z, cofO.tn.x));
     }
 
     // 0.4 สะพานชนบทคอนกรีตพร้อมคานข้าง ราวกันตก และหมุดสะท้อนแสง
@@ -3923,8 +4172,9 @@
     for (let tt = 0.30; tt <= 0.34; tt += 0.005) {
       const oL = offRoad(tt, -5.8);
       const oR = offRoad(tt, 5.8);
-      tree(oL.x, oL.z, 1.22);
-      tree(oR.x, oR.z, 1.22);
+      if (!clearOfTempleSites(oL.x, oL.z, 24) || !clearOfTempleSites(oR.x, oR.z, 24)) continue;
+      tree(oL.x, oL.z, 1.22, 'broadleaf');
+      tree(oR.x, oR.z, 1.22, 'broadleaf');
       taken.push([oL.x, oL.z, 1.8], [oR.x, oR.z, 1.8]);
 
       const p = route.getPoint(tt);
@@ -3960,7 +4210,6 @@
 
     for (let i = 0, n = 0; n < 240 && i < 3000; i++) {
       const t = 0.03 + rand() * 0.94;
-      if (t > 0.55 && t < 0.96) continue; // ซ่อนต้นไม้ป่าในโซนที่ 1-4
       if (t >= 0.295 && t <= 0.345) {
         rand();
         rand();
@@ -3969,20 +4218,33 @@
       }
       const sc = 0.65 + rand() * 0.9,
         o = offRoad(t, (rand() < 0.5 ? -1 : 1) * (4.6 + rand() * 15));
-      if (!spotOK(o.x, o.z, 1.15 * sc + 0.5)) continue;
-      // ลดความหนาแน่นต้นไม้ในช่วงจันจว้า-เวียงแก่นลง ~40% โดยคงลำดับ rand() เดิมไว้ 100%
-      if (n % 5 === 1 || n % 5 === 3) {
-        rand();
-        rand();
-        n++;
-        continue;
-      }
+      if (!spotOK(o.x, o.z, 1.15 * sc + 0.5) || !clearOfTempleSites(o.x, o.z, 24)) continue;
       taken.push([o.x, o.z, 0.85 * sc]);
-      tree(o.x, o.z, sc);
+      tree(o.x, o.z, sc, t >= 0.925 ? 'pine' : 'broadleaf');
       n++;
     }
-    /* ทิวทัศน์ริมถนนขึ้นดอย/ภูชี้ฟ้า (t 0.92–0.995): ต้นไม้หนาแน่นขึ้น + หินก้อนใหญ่ + เสาหลักนำทางสะท้อนแสง
-     * เดิมช่วงนี้ถูกข้ามไม่มีสิ่งใดตกแต่งเลย ทำให้ถนนใหม่โล่งและดูไม่สมจริง
+    {
+      let townSeed = 4517;
+      const townRand = () => ((townSeed = (townSeed * 16807) % 2147483647) - 1) / 2147483646;
+      const townStops = ROUTE.filter(stop =>
+        ['janjawa', 'chiangsaen', 'chiangkhong', 'wiangkaen'].includes(stop.id)
+      );
+      townStops.forEach(stop => {
+        const centerT = stop.t;
+        for (const side of [-1, 1]) {
+          for (let row = 0; row < 3; row++) {
+            const t = Math.max(0.015, Math.min(0.56, centerT + (row - 1) * 0.006)),
+              offset = side * (13 + row * 3.8 + townRand() * 1.2),
+              scale = 0.92 + townRand() * 0.3,
+              o = offRoad(t, offset);
+            if (!spotOK(o.x, o.z, 2.8) || !clearOfTempleSites(o.x, o.z, 24)) continue;
+            taken.push([o.x, o.z, 2.5]);
+            tree(o.x, o.z, scale, 'broadleaf');
+          }
+        }
+      });
+    }
+    /* ทิวทัศน์ริมถนนขึ้นดอย/ภูชี้ฟ้า (t 0.92–0.995): ป่าสน + หินก้อนใหญ่ + เสาหลักนำทางสะท้อนแสง
      * ใช้ตัวสุ่มแยกต่างหาก จึงไม่กระทบตำแหน่งของที่วางไว้ก่อนหน้า */
     {
       let hs = 9173;
@@ -3993,15 +4255,17 @@
           sc = 0.85 + hr() * 1.15,
           side = hr() < 0.5 ? -1 : 1,
           o = offRoad(t, side * (5.4 + hr() * hr() * 36));
-        if (!spotOK(o.x, o.z, 1.15 * sc + 0.5)) continue;
+        if (!spotOK(o.x, o.z, 1.15 * sc + 0.5) || !clearOfTempleSites(o.x, o.z, 24)) continue;
         taken.push([o.x, o.z, 0.85 * sc]);
-        tree(o.x, o.z, sc);
+        tree(o.x, o.z, sc, hn % 5 === 0 ? 'broadleaf' : 'pine');
         hn++;
       }
       // หินก้อนใหญ่ริมไหล่ทางและตามเชิงเขา
       const rockGeo = new THREE.IcosahedronGeometry(1, 0),
         rockMat = new THREE.MeshLambertMaterial({ color: 0x8c8a82, flatShading: true }),
         rockList = [];
+      rockMat.normalMap = earthNormalMap;
+      rockMat.normalScale = new THREE.Vector2(0.1, 0.1);
       for (let i = 0; i < 500 && rockList.length < 70; i++) {
         const t = 0.922 + hr() * 0.073,
           side = hr() < 0.5 ? -1 : 1,
@@ -4059,6 +4323,76 @@
         scene.add(bands);
       }
     }
+    const roadsideBananaLeafGeo = (() => {
+      const positions = [],
+        indices = [],
+        rows = 8;
+      for (let i = 0; i <= rows; i++) {
+        const u = i / rows,
+          z = u * 2.8,
+          y = Math.sin(u * Math.PI) * 0.12 - u * u * 1.15,
+          width = 0.58 * Math.pow(1 - u, 0.72);
+        positions.push(-width, y, z, 0, y + 0.045, z, width, y, z);
+        if (i < rows) {
+          const a = i * 3;
+          indices.push(a, a + 1, a + 3, a + 1, a + 4, a + 3, a + 1, a + 2, a + 4, a + 2, a + 5, a + 4);
+        }
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setIndex(indices);
+      geometry.computeVertexNormals();
+      return geometry;
+    })();
+    {
+      const bananaStemMat = sm2(0x71943b),
+        bananaLeafMat = [
+          new THREE.MeshStandardMaterial({ color: 0x397d31, roughness: 0.82, side: THREE.DoubleSide }),
+          new THREE.MeshStandardMaterial({ color: 0x68a947, roughness: 0.8, side: THREE.DoubleSide })
+        ],
+        bananaGroves = [
+          [0.05, -1], [0.09, 1], [0.14, -1], [0.19, 1]
+        ];
+      bananaGroves.forEach(([routeT, side], groveIndex) => {
+        let site = null;
+        for (const delta of [0, -0.012, 0.012, -0.024, 0.024]) {
+          const t = Math.max(0.025, Math.min(0.22, routeT + delta));
+          for (const setback of [17, 22, 27]) {
+            const candidate = offRoad(t, side * setback);
+            if (
+              !spotOK(candidate.x, candidate.z, 7) ||
+              !clearOfTempleSites(candidate.x, candidate.z, 24)
+            ) continue;
+            site = candidate;
+            break;
+          }
+          if (site) break;
+        }
+        if (!site) return;
+        taken.push([site.x, site.z, 7]);
+        const grove = new THREE.Group();
+        grove.position.set(site.x, 0, site.z);
+        grove.rotation.y = Math.atan2(site.tn.x, site.tn.z) + groveIndex * 0.47;
+        for (let stem = 0; stem < 3; stem++) {
+          const x = (stem - 1) * 0.72,
+            top = 2.25 + (stem % 2) * 0.25,
+            trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, top, 7), bananaStemMat);
+          trunk.position.set(x, top / 2, (stem - 1) * 0.35);
+          trunk.castShadow = true;
+          grove.add(trunk);
+          for (let leafIndex = 0; leafIndex < 7; leafIndex++) {
+            const leaf = new THREE.Mesh(roadsideBananaLeafGeo, bananaLeafMat[(leafIndex + stem) % bananaLeafMat.length]);
+            leaf.position.set(x, top - 0.08, (stem - 1) * 0.35);
+            leaf.rotation.y = (leafIndex / 7) * Math.PI * 2 + stem * 0.45;
+            leaf.rotation.x = -0.06 - (leafIndex % 3) * 0.08;
+            leaf.scale.setScalar(0.88 + stem * 0.08);
+            leaf.castShadow = true;
+            grove.add(leaf);
+          }
+        }
+        scene.add(grove);
+      });
+    }
     for (const batch of treeBatches.values()) {
       const instanced = new THREE.InstancedMesh(batch.geometry, batch.material, batch.matrices.length);
       instanced.position.set(batch.tileX, 0, batch.tileZ);
@@ -4073,9 +4407,9 @@
     }
 
     /* ============================================================================
-     * src/scene/12-hills-fields.js
+     * scene/12-hills-fields.js
      * เนินเขา (HILLS) และการสุ่มตำแหน่งแปลงนา/ดอกไม้ (FLSP, FIELDS, PADS)
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     const HILLS = [],
@@ -4243,7 +4577,9 @@
     }
     const FLSP = [],
       FIELDS = [],
-      PADS = [];
+      PADS = [],
+      VILLAGE_HOUSES = [],
+      MAP_RICE_FIELDS = [];
     for (let i = 0; i < 110; i++) {
       let t = rand(),
         p = route.getPoint(t),
@@ -4255,9 +4591,9 @@
     }
 
     /* ============================================================================
-     * src/scene/13-sky-clouds-sun-stars.js
+     * scene/13-sky-clouds-sun-stars.js
      * เมฆ ดวงอาทิตย์ และดาวพื้นฐาน
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     const clouds = [];
@@ -4390,9 +4726,9 @@
 
 
     /* ============================================================================
-     * src/scene/14-car.js
+     * scene/14-car.js
      * รถ EV สีครีมของผู้เล่น (ตัวถัง ไฟ ล้อ ราวหลังคาและสัมภาระ)
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     const car = new THREE.Group();
@@ -4411,7 +4747,7 @@
     }
     box(1.05, 0.13, 0.04, rubber, 0, 0.62, 1.57, car);
     box(1.75, 0.08, 0.08, hub, 0, 0.52, 1.58, car);
-    const lightMat = mat(0xfff7d0, { emissive: 0xffdd88, emissiveIntensity: 0.4 });
+    const lightMat = mat(0xfff3c0, { emissive: 0xffdd88, emissiveIntensity: 0.4 });
     for (let side of [-1, 1]) {
       box(0.37, 0.2, 0.06, lightMat, side * 0.59, 0.86, 1.57, car);
       box(0.27, 0.13, 0.06, mat(0xc2816f), side * 0.62, 0.81, -1.57, car);
@@ -4474,12 +4810,12 @@
     }
 
     /* ============================================================================
-     * src/scene/15-village-houses.js
+     * scene/15-village-houses.js
      * บ้านและกระท่อมริมทาง กอหญ้า และหิ่งห้อย (fireflies)
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
-    /* roadside details: grass tufts + village houses (own PRNG keeps the existing layout unchanged) */
+    /* roadside details: grass tufts + a planned roadside village */
     const winM = mat(0x4a3b2a, { emissive: 0xffc46b, emissiveIntensity: 0 });
     const FF = (() => {
       const N = 90,
@@ -4501,7 +4837,7 @@
       geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
       const m = new THREE.PointsMaterial({
           color: 0xfff2a0,
-          size: 0.22,
+          size: 0.38,
           transparent: true,
           opacity: 0,
           depthWrite: false,
@@ -4509,10 +4845,16 @@
         }),
         p = new THREE.Points(geo, m);
       const bodyGeo = new THREE.IcosahedronGeometry(0.055, 0),
-        abdomenGeo = new THREE.OctahedronGeometry(0.045, 0),
+        abdomenGeo = new THREE.OctahedronGeometry(0.065, 0),
         wingShape = new THREE.Shape(),
         bodyMat = new THREE.MeshLambertMaterial({ color: 0x40392d }),
-        abdomenMat = new THREE.MeshBasicMaterial({ color: 0xffdc64, transparent: true, opacity: 0.95 }),
+        abdomenMat = new THREE.MeshBasicMaterial({
+          color: 0xffed91,
+          transparent: true,
+          opacity: 1,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending
+        }),
         wingMat = new THREE.MeshBasicMaterial({ color: 0xc9c5a0, transparent: true, opacity: 0.58, side: THREE.DoubleSide, depthWrite: false }),
         body = new THREE.InstancedMesh(bodyGeo, bodyMat, N),
         abdomen = new THREE.InstancedMesh(abdomenGeo, abdomenMat, N),
@@ -4541,7 +4883,7 @@
       return { p, m, base, pos, geo, N, body, abdomen, wings, dummy };
     })();
     function fireflies() {
-      FF.m.opacity = nl * 0.9;
+      FF.m.opacity = Math.min(1, nl * 1.3);
       const active = nl > 0.03;
       FF.p.visible = FF.body.visible = FF.abdomen.visible = FF.wings.visible = active;
       if (!active) return;
@@ -4561,7 +4903,7 @@
         FF.dummy.updateMatrix();
         FF.body.setMatrixAt(i, FF.dummy.matrix);
         FF.dummy.position.set(x, y - 0.018, z + Math.cos(b[3]) * 0.055);
-        FF.dummy.scale.setScalar(blink);
+        FF.dummy.scale.setScalar(blink * (0.85 + nl * 0.45));
         FF.dummy.updateMatrix();
         FF.abdomen.setMatrixAt(i, FF.dummy.matrix);
         const flap = Math.sin(t * 18 + b[3]) * 0.12;
@@ -4894,8 +5236,49 @@
         polygonOffsetUnits: -2
       });
     })();
+    const _templeDirtMat = (() => {
+      const c = document.createElement('canvas');
+      c.width = 128;
+      c.height = 128;
+      const ctx = c.getContext('2d');
+      const dirt = ctx.createRadialGradient(64, 64, 12, 64, 64, 64);
+      dirt.addColorStop(0, 'rgba(125, 83, 48, 0.96)');
+      dirt.addColorStop(0.48, 'rgba(145, 102, 61, 0.90)');
+      dirt.addColorStop(0.76, 'rgba(132, 112, 70, 0.62)');
+      dirt.addColorStop(1, 'rgba(112, 125, 78, 0)');
+      ctx.fillStyle = dirt;
+      ctx.fillRect(0, 0, 128, 128);
+      for (let i = 0; i < 180; i++) {
+        const angle = i * 2.39996,
+          radius = 8 + ((i * 29) % 52),
+          x = 64 + Math.cos(angle) * radius,
+          y = 64 + Math.sin(angle) * radius;
+        ctx.fillStyle = i % 2 ? 'rgba(83, 57, 34, 0.2)' : 'rgba(206, 164, 103, 0.24)';
+        ctx.beginPath();
+        ctx.ellipse(x, y, 1 + (i % 3) * 0.45, 0.8 + (i % 2) * 0.35, angle, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      const texture = new THREE.CanvasTexture(c);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      return new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2
+      });
+    })();
     const addGroundPatch = (parent, w, d, x = 0, z = 0, y = 0.012) => {
       const m = new THREE.Mesh(_groundPatchGeo, _groundPatchMat);
+      m.position.set(x, y, z);
+      m.scale.set(w, 1, d);
+      m.receiveShadow = true;
+      parent.add(m);
+      return m;
+    };
+    const addTempleDirtPatch = (parent, w, d, x = 0, z = 0, y = 0.03) => {
+      const m = new THREE.Mesh(_groundPatchGeo, _templeDirtMat);
       m.position.set(x, y, z);
       m.scale.set(w, 1, d);
       m.receiveShadow = true;
@@ -5181,27 +5564,31 @@
         [big, 4.4],
         [hut, 2.2]
       ];
-      let placedN = 0;
-      spec.forEach(([fn, rad], index) => {
-        // ขยายสเกลบ้านให้มีขนาดสมจริงเมื่อเทียบกับตัวรถและคน (1.42x - 1.82x)
-        const sc = 1.42 + rn() * 0.4;
-        for (let k = 0; k < 300; k++) {
-          const sd = rn() < 0.5 ? -1 : 1,
-            t =
-              index >= spec.length / 2
-                ? tAt(136) + rn() * (tAt(169) - tAt(136))
-                : 0.05 + rn() * 0.9,
-            o = offRoad(t, sd * (10.5 + rn() * 9));
-          if (!spotOK(o.x, o.z, rad * sc * 0.72 + 0.4)) continue;
-          taken.push([o.x, o.z, rad * sc * 0.72]);
-          const g = new THREE.Group();
-          g.position.set(o.x, 0, o.z);
-          g.rotation.y = Math.atan2(sd * o.tn.z, -sd * o.tn.x) + (rn() - 0.5) * 0.25;
-          g.scale.setScalar(sc);
-          scene.add(g);
-          fn(g);
-          placedN++;
-          break;
+      const villageLots = [
+        [108, -1, 12], [110, 1, 12], [112, -1, 15], [114, 1, 15],
+        [119, -1, 12], [121, 1, 12], [123, -1, 15], [125, 1, 15],
+        [130, -1, 12], [132, 1, 12], [134, -1, 15], [135, 1, 15]
+      ];
+      villageLots.forEach(([km, sd], index) => {
+        const [fn, rad] = spec[index],
+          sc = 1.42 + rn() * 0.4,
+          reserve = rad * sc + 1.5,
+          offsets = [0, -0.8, 0.8, -1.6, 1.6];
+        for (const deltaKm of offsets) {
+          const t = tAt(Math.max(103, Math.min(135, km + deltaKm)));
+          for (const setback of [12, 16, 20]) {
+            const o = offRoad(t, sd * setback);
+            if (!spotOK(o.x, o.z, reserve + 0.4) || !clearOfTempleSites(o.x, o.z, 26)) continue;
+            taken.push([o.x, o.z, reserve]);
+            VILLAGE_HOUSES.push({ x: o.x, z: o.z, t });
+            const g = new THREE.Group();
+            g.position.set(o.x, 0, o.z);
+            g.rotation.y = Math.atan2(sd * o.tn.z, -sd * o.tn.x);
+            g.scale.setScalar(sc);
+            scene.add(g);
+            fn(g);
+            return;
+          }
         }
       });
       const tuftGeo = buildReedClusterGeo(false);
@@ -5225,9 +5612,9 @@
     }
 
     /* ============================================================================
-     * src/scene/16-mood-bubble.js
+     * scene/16-mood-bubble.js
      * ฟองข้อความอารมณ์ลอยเหนือรถ (placeBubble)
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     /* floating mood bubble above the car */
@@ -5250,9 +5637,9 @@
     }
 
     /* ============================================================================
-     * src/scene/17-sky-birds.js
+     * scene/17-sky-birds.js
      * นกที่บินอยู่ในฉาก
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     const birds = [];
@@ -5606,9 +5993,9 @@
     }
 
     /* ============================================================================
-     * src/scene/18-animals.js
+     * scene/18-animals.js
      * สัตว์ริมทาง (กวาง ควาย วัว สุนัข กระต่าย ไก่) และแอนิเมชัน
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     const EYE = sm2(0x1b1512),
@@ -5616,6 +6003,21 @@
       HORN = sm2(0xe7dfc8),
       HOOF = sm2(0x3a3028),
       SPOT = sm2(0x4a3526);
+    function animalLeg(parent, x, y, z, length, radius, material, footMaterial = HOOF) {
+      const pivot = new THREE.Group(),
+        upperLength = length * 0.58,
+        lowerLength = length * 0.46;
+      pivot.position.set(x, y, z);
+      parent.add(pivot);
+      cyl(radius * 0.72, radius, upperLength, material, 0, -upperLength * 0.5, 0, pivot);
+      ball(radius * 0.82, material, 0, -upperLength, 0, pivot);
+      const lower = new THREE.Group();
+      lower.position.y = -upperLength;
+      pivot.add(lower);
+      cyl(radius * 0.54, radius * 0.72, lowerLength, material, 0, -lowerLength * 0.5, 0, lower);
+      ball(radius * 0.7, footMaterial, 0, -lowerLength - 0.025, 0.025, lower, 1, 0.55, 1.3);
+      return { pivot, lower };
+    }
     function quad(o) {
       const g = new THREE.Group(),
         m = sm2(o.c),
@@ -5623,15 +6025,21 @@
         L = o.leg,
         by = L + o.bh * 0.85;
       ball(1, m, 0, by, 0, g, o.bw, o.bh, o.bl);
-      ball(1, m, 0, by + o.bh * 0.05, o.bl * 0.5, g, o.bw * 0.96, o.bh * 0.97, o.bl * 0.5);
-      ball(1, m, 0, by, -o.bl * 0.5, g, o.bw * 0.92, o.bh * 0.93, o.bl * 0.45);
-      if (o.spots)
-        for (const q of [
-          [0.7, 0.55, 0.1, 1.3],
-          [-0.6, 0.6, -0.4, 1.1],
-          [0.55, 0.5, -0.6, 0.9]
-        ])
-          ball(0.12, SPOT, q[0] * o.bw, by + o.bh * q[1], q[2] * o.bl, g, 1, 0.7, q[3]);
+      ball(1, m, 0, by + o.bh * 0.02, o.bl * 0.42, g, o.bw * 0.9, o.bh * 0.98, o.bl * 0.42);
+      ball(1, m, 0, by - o.bh * 0.02, -o.bl * 0.4, g, o.bw * 0.94, o.bh * 0.95, o.bl * 0.42);
+      if (o.spots) {
+        const patches = [
+          [-0.58, 0.58, 0.08, 0.92],
+          [0.56, 0.5, 0.5, 1.08],
+          [-0.38, 0.48, -0.52, 1.12],
+          [0.62, 0.48, -0.55, 0.9],
+          [-0.7, 0.42, 0.62, 0.76],
+          [0.3, 0.58, -0.12, 0.82]
+        ];
+        for (const side of [-1, 1])
+          for (const q of patches)
+            ball(0.085, SPOT, side * o.bw * 0.86, by + o.bh * q[1], q[2] * o.bl, g, 0.65, 0.92, q[3]);
+      }
       const a = o.na,
         nl = o.neck,
         nz = Math.sin(a) * nl,
@@ -5644,13 +6052,19 @@
       hd.position.set(0, ny, nz);
       hd.rotation.x = a * 0.3;
       nk.add(hd);
+      const muzzleMat = sm2(o.muzzle || o.d || o.c),
+        eyeLight = sm2(0xf2e5cf);
       ball(1, m, 0, 0, o.hl * 0.3, hd, o.hw, o.hw * 1.05, o.hl);
-      ball(1, dk, 0, -o.hw * 0.2, o.hl * 0.9, hd, o.hw * 0.65, o.hw * 0.6, o.hl * 0.45);
-      ball(o.hw * 0.2, NOSE, 0, -o.hw * 0.15, o.hl * 1.32, hd);
+      ball(1, muzzleMat, 0, -o.hw * 0.2, o.hl * 0.9, hd, o.hw * 0.65, o.hw * 0.6, o.hl * 0.45);
+      ball(o.hw * 0.2, NOSE, 0, -o.hw * 0.15, o.hl * 1.32, hd, 1, 0.75, 0.8);
       for (const s of [-1, 1]) {
-        ball(o.hw * 0.2, EYE, s * o.hw * 0.85, o.hw * 0.35, o.hl * 0.5, hd);
-        const e = ball(o.ew, dk, s * (o.hw + o.ew * 0.3), o.hw * 0.7, -o.hl * 0.1, hd, 0.4, 1.1, 0.45);
+        ball(o.hw * 0.2, eyeLight, s * o.hw * 0.86, o.hw * 0.38, o.hl * 0.51, hd, 1, 1, 0.7);
+        ball(o.hw * 0.12, EYE, s * o.hw * 0.91, o.hw * 0.39, o.hl * 0.55, hd, 1, 1, 0.65);
+        const e = ball(o.ew, dk, s * (o.hw + o.ew * 0.3), o.hw * 0.5, -o.hl * 0.12, hd, 0.65, 1.15, 0.55);
         e.rotation.z = -s * 0.75;
+        const ear = ball(o.ew * 0.95, dk, s * (o.hw + o.ew * 0.28), o.hw * 0.28, -o.hl * 0.08, hd, 0.72, 0.42, 1.55);
+        ear.rotation.y = s * 0.25;
+        ear.rotation.z = -s * 0.18;
         if (o.horn)
           cyl(
             o.hw * 0.28,
@@ -5665,18 +6079,30 @@
             -s * 1.15
           );
         if (o.antler) {
-          cyl(0.012, 0.008, 0.4, HORN, s * 0.06, o.hw + 0.17, -0.04, hd, -0.25, -s * 0.3);
-          cyl(0.01, 0.005, 0.2, HORN, s * 0.1, o.hw + 0.2, 0.02, hd, 0.4, -s * 0.7);
+          const antlerBase = new THREE.Group();
+          antlerBase.position.set(s * o.hw * 0.52, o.hw * 0.78, -o.hl * 0.24);
+          hd.add(antlerBase);
+          cyl(0.018, 0.013, o.hw * 1.8, HORN, 0, o.hw * 0.8, 0, antlerBase, -0.16, -s * 0.08);
+          cyl(0.012, 0.008, o.hw * 0.82, HORN, 0, o.hw * 1.23, 0, antlerBase, 0.05, -s * 0.62);
+          cyl(0.01, 0.006, o.hw * 0.68, HORN, -s * 0.035, o.hw * 0.88, 0, antlerBase, -0.08, s * 0.72);
         }
       }
+      const legs = [];
+      const legPivotY = Math.max(L + o.bh * 0.25, (L + o.bh * 0.22) * 1.04 + 0.05);
       for (const s of [-1, 1])
-        for (const zz of [o.bl * 0.55, -o.bl * 0.55]) {
-          ball(o.lt * 0.075, m, s * o.bw * 0.62, L, zz, g, 1, 1.8, 1.2);
-          cyl(0.04 * o.lt, 0.028 * o.lt, L, m, s * o.bw * 0.62, L / 2, zz, g);
-          cyl(0.034 * o.lt, 0.04 * o.lt, 0.06, HOOF, s * o.bw * 0.62, 0.03, zz, g);
-        }
-      cyl(0.02, 0.035, o.bl * 0.5, dk, 0, by + o.bh * 0.3, -o.bl * 0.98, g, -0.6, 0);
+        for (const zz of [o.bl * 0.36, -o.bl * 0.36])
+          legs.push({
+            ...animalLeg(g, s * o.bw * 0.55, legPivotY, zz, L + o.bh * 0.22, Math.max(0.035, o.bw * 0.24), m),
+            phase: s * Math.sign(zz) > 0 ? 0 : Math.PI
+          });
+      const tail = new THREE.Group();
+      tail.position.set(0, by + o.bh * 0.18, -o.bl * 0.82);
+      g.add(tail);
+      cyl(0.018, 0.028, o.bl * 0.48, dk, 0, -o.bl * 0.2, -o.bl * 0.22, tail, -0.82, 0);
+      ball(o.bw * 0.14, dk, 0, -o.bl * 0.45, -o.bl * 0.42, tail, 0.72, 1.15, 0.75);
       g.userData.head = nk;
+      g.userData.legs = legs;
+      g.userData.tail = tail;
       return g;
     }
     function rabbit() {
@@ -5698,7 +6124,13 @@
       }
       ball(0.018, NOSE, 0, 0.04, 0.11, h);
       ball(0.05, w, 0, 0.2, -0.25, g);
-      g.scale.setScalar(1.8);
+      const legs = [];
+      for (const s of [-1, 1]) {
+        legs.push({ ...animalLeg(g, s * 0.065, 0.18, 0.08, 0.12, 0.035, m, m), phase: s < 0 ? 0 : Math.PI });
+        legs.push({ ...animalLeg(g, s * 0.07, 0.16, -0.14, 0.1, 0.04, m, m), phase: s < 0 ? Math.PI : 0 });
+      }
+      g.userData.legs = legs;
+      g.scale.setScalar(1.3);
       g.userData.head = h;
       return g;
     }
@@ -5721,9 +6153,21 @@
       ball(0.02, r, 0, -0.06, 0.03, h);
       for (const s of [-1, 1]) {
         ball(0.012, EYE, s * 0.04, 0.015, 0.03, h);
-        cyl(0.012, 0.012, 0.2, y, s * 0.05, 0.1, 0, g);
+        const leg = animalLeg(g, s * 0.045, 0.185, 0.025, 0.14, 0.022, y, y);
+        leg.phase = s < 0 ? 0 : Math.PI;
+        leg.pivot.rotation.z = s * 0.02;
+        leg.toe = [];
+        for (const toeSide of [-1, 0, 1]) {
+          const toe = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.008, 0.09, 5), y);
+          toe.position.set(toeSide * 0.025, -0.07, 0.035);
+          toe.rotation.x = Math.PI / 2;
+          leg.lower.add(toe);
+          leg.toe.push(toe);
+        }
+        if (!g.userData.legs) g.userData.legs = [];
+        g.userData.legs.push(leg);
       }
-      g.scale.setScalar(1.8);
+      g.scale.setScalar(1.2);
       g.userData.head = h;
       return g;
     }
@@ -5747,7 +6191,7 @@
             ew: 0.07,
             antler: 1
           });
-          g.scale.setScalar(1.3);
+          g.scale.setScalar(1.55);
           break;
         case 'buffalo':
           g = quad({
@@ -5766,12 +6210,13 @@
             ew: 0.1,
             horn: 1
           });
-          g.scale.setScalar(1.45);
+          g.scale.setScalar(1.58);
           break;
         case 'cow':
           g = quad({
             c: 0xe8dfcf,
-            d: 0xe3b3a6,
+            d: 0x554942,
+            muzzle: 0xd49a88,
             bl: 0.62,
             bh: 0.32,
             bw: 0.28,
@@ -5786,7 +6231,7 @@
             horn: 0.35,
             spots: 1
           });
-          g.scale.setScalar(1.35);
+          g.scale.setScalar(1.48);
           break;
         case 'dog':
           g = quad({
@@ -5816,6 +6261,14 @@
       return g;
     }
     const animals = [],
+      ANIMAL_MOTION = {
+        deer: { radius: 3.2, cycle: 17, gait: 5.2, stride: 0.42 },
+        buffalo: { radius: 1.8, cycle: 22, gait: 3.3, stride: 0.28 },
+        cow: { radius: 2.2, cycle: 19, gait: 3.8, stride: 0.3 },
+        dog: { radius: 2.4, cycle: 15, gait: 6.2, stride: 0.48 },
+        rabbit: { radius: 0.9, cycle: 13, gait: 8.5, stride: 0.55 },
+        chicken: { radius: 1.1, cycle: 12, gait: 9.5, stride: 0.58 }
+      },
       ATYPES = [
         'deer',
         'buffalo',
@@ -5840,11 +6293,26 @@
       ];
     for (let i = 0, n = 0; n < ATYPES.length && i < 500; i++) {
       const t = 0.06 + rand() * 0.9,
-        o = offRoad(t, (rand() < 0.5 ? -1 : 1) * (6.5 + rand() * 6));
+        sideOffset = (rand() < 0.5 ? -1 : 1) * (6.5 + rand() * 6),
+        o = offRoad(t, sideOffset);
       if (!spotOK(o.x, o.z, 1.3)) continue;
-      const a = critter(ATYPES[n]);
+      const type = ATYPES[n],
+        a = critter(type),
+        motion = ANIMAL_MOTION[type],
+        base = rand(),
+        t0 = Math.max(0.01, t - 0.001),
+        t1 = Math.min(0.99, t + 0.001),
+        metersPerT = route.getPoint(t0).distanceTo(route.getPoint(t1)) / Math.max(0.0001, t1 - t0),
+        tRadius = motion.radius / Math.max(1, metersPerT);
       a.position.set(o.x, 0, o.z);
-      a.userData.base = rand() * 6.28;
+      a.userData.base = base * Math.PI * 2;
+      a.userData.walkStartT = Math.max(0.02, t - tRadius);
+      a.userData.walkEndT = Math.min(0.98, t + tRadius);
+      a.userData.walkOffset = sideOffset;
+      a.userData.walkCycle = motion.cycle;
+      a.userData.walkPhase = base * motion.cycle;
+      a.userData.gaitSpeed = motion.gait;
+      a.userData.stride = motion.stride;
       taken.push([o.x, o.z, 1.2]);
       scene.add(a);
       animals.push(a);
@@ -5852,17 +6320,55 @@
     }
     function animAnimal(a, i) {
       const u = a.userData;
-      a.rotation.y = u.base + Math.sin(totalTime * 0.25 + i) * 0.12;
-      if (u.head) {
-        const k = Math.max(0, Math.sin(totalTime * (u.type === 'chicken' ? 2.2 : 0.35) + i * 1.9));
-        u.head.rotation.x = (u.type === 'chicken' ? 0.8 : u.type === 'rabbit' ? 0.5 : 0.55) * k;
+      const motionScale = state.reduced ? 0.35 : 1,
+        cycle = u.walkCycle,
+        pause = cycle * 0.16,
+        walkDuration = (cycle - pause * 2) * 0.5,
+        localTime = ((totalTime * motionScale + u.walkPhase) % cycle + cycle) % cycle;
+      let walkT = u.walkStartT,
+        direction = 1,
+        progress = 0,
+        walking = false;
+      if (localTime < pause) {
+        walkT = u.walkStartT;
+      } else if (localTime < pause + walkDuration) {
+        progress = (localTime - pause) / walkDuration;
+        const eased = progress * progress * (3 - 2 * progress);
+        walkT = u.walkStartT + (u.walkEndT - u.walkStartT) * eased;
+        walking = true;
+      } else if (localTime < pause + walkDuration + pause) {
+        walkT = u.walkEndT;
+        direction = -1;
+      } else {
+        progress = (localTime - pause - walkDuration - pause) / walkDuration;
+        const eased = progress * progress * (3 - 2 * progress);
+        walkT = u.walkEndT - (u.walkEndT - u.walkStartT) * eased;
+        direction = -1;
+        walking = true;
       }
+      const location = offRoad(walkT, u.walkOffset),
+        gaitPhase = totalTime * u.gaitSpeed * motionScale + u.base,
+        strideBlend = walking ? Math.sin(progress * Math.PI) : 0;
+      a.position.set(location.x, walking ? Math.abs(Math.sin(gaitPhase * 2)) * strideBlend * (u.type === 'rabbit' ? 0.055 : 0.018) : 0, location.z);
+      a.rotation.y = Math.atan2(location.tn.x * direction, location.tn.z * direction);
+      a.rotation.x = walking ? Math.sin(gaitPhase * 2) * strideBlend * 0.018 : 0;
+      for (const leg of u.legs || []) {
+        const swing = Math.sin(gaitPhase + leg.phase);
+        leg.pivot.rotation.x = swing * u.stride * strideBlend;
+        leg.lower.rotation.x = -Math.max(0, swing) * u.stride * 0.55 * strideBlend;
+      }
+      if (u.head) {
+        const grazing = Math.max(0, Math.sin(totalTime * (u.type === 'chicken' ? 2.2 : 0.55) * motionScale + i * 1.9));
+        const headMotion = u.type === 'chicken' ? 0.18 : u.type === 'rabbit' ? 0.08 : 0.16;
+        u.head.rotation.x = -strideBlend * 0.08 + headMotion * grazing;
+      }
+      if (u.tail) u.tail.rotation.x = Math.sin(totalTime * (u.type === 'dog' ? 8 : 2.4) * motionScale + i) * (u.type === 'dog' ? 0.35 : 0.12);
     }
 
     /* ============================================================================
-     * src/scene/19-vehicles.js
+     * scene/19-vehicles.js
      * ยานพาหนะบนถนนทุกชนิด (รถเก๋ง กระบะ รถบัส ตุ๊กตุ๊ก จักรยาน ฯลฯ) และ mkVeh
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     /* ============================================================================
@@ -6287,13 +6793,21 @@
         makeCrossingKid(false, 1),
         makeCrossingKid(true, 2)
       ];
-      crossingKids.forEach(k => crosswalkGrp.add(k.kid));
+      crossingKids.forEach(k => {
+        k.kid.visible = false;
+        crosswalkGrp.add(k.kid);
+      });
 
       scene.add(crosswalkGrp);
+      let crossingStartedAt = null,
+        crossingCompleted = false;
       window.dynamicEvents.push({
         group: crosswalkGrp,
         condition: s => {
-          if (s.night) window._schoolCrossingActive = false;
+          if (s.night) {
+            window._schoolCrossingActive = false;
+            crossingKids.forEach(k => { k.kid.visible = false; });
+          }
           return s.night === false;
         },
         update: (dt, time) => {
@@ -6302,9 +6816,19 @@
           if (beaconBulbs[0]) beaconBulbs[0].color.setHex(blink ? 0xffcc00 : 0x553b00);
           if (beaconBulbs[1]) beaconBulbs[1].color.setHex(!blink ? 0xffcc00 : 0x553b00);
 
-          // วัฏจักร 14 วินาที: ช่วง 0..8 วินาที เด็กๆ เดินข้ามทางม้าลายพร้อมคุณครูโบกธง / ช่วง 8..14 วินาที ยืนรอริมทางอย่างปลอดภัย
-          const cyc = time % 14;
-          const isCrossing = cyc < 9.0;
+          const routeGap = cwT - state.routeT,
+            approachingCrosswalk = routeGap >= 0 && routeGap <= 0.006;
+          if (!crossingCompleted && crossingStartedAt === null && approachingCrosswalk) {
+            crossingStartedAt = time;
+            crossingKids.forEach(k => { k.kid.visible = true; });
+          }
+          const elapsed = crossingStartedAt === null ? 0 : time - crossingStartedAt,
+            isCrossing = crossingStartedAt !== null && !crossingCompleted && elapsed < 9;
+          if (!isCrossing && crossingStartedAt !== null && elapsed >= 9) {
+            crossingCompleted = true;
+            crossingKids.forEach(k => { k.kid.visible = false; });
+            window._schoolCrossingActive = false;
+          }
 
           // แอนิเมชันคุณครูโบกธงแดงและหันมองซ้าย-ขวาดูรถให้เด็กๆ
           if (isCrossing) {
@@ -6318,14 +6842,13 @@
             tHead.rotation.y = Math.sin(time * 1.2) * 0.15;
           }
 
-          // แอนิเมชันเด็กนักเรียน 3 คนเดินเรียงแถวข้ามทางม้าลายไป-กลับเข้าประตูโรงเรียน
+          // เด็กนักเรียน 3 คนข้ามถนนครั้งเดียวเมื่อรถเข้าใกล้
           crossingKids.forEach((k, i) => {
-            const delay = i * 0.85;
-            const localT = Math.max(0, Math.min(1, (cyc - delay) / 6.8));
-            // สลับฝั่งเดินข้ามทุกๆ รอบวัฏจักร
-            const dir = Math.floor(time / 14) % 2 === 0 ? 1 : -1;
-            const startX = dir > 0 ? -3.6 - i * 0.65 : 3.6 + i * 0.65;
-            const endX = dir > 0 ? 3.6 + i * 0.55 : -3.6 - i * 0.55;
+            const delay = i * 0.85,
+              localT = Math.max(0, Math.min(1, (elapsed - delay) / 6.8)),
+              dir = 1,
+              startX = -3.6 - i * 0.65,
+              endX = 3.6 + i * 0.55;
             const curX = startX + (endX - startX) * localT;
             const curZ = (i - 1) * 0.52;
 
@@ -6353,7 +6876,7 @@
             }
           });
           window._schoolCrossingActive = crossingKids.some(
-            k => k.kid.visible && Math.abs(k.kid.position.x) < 4.2
+            k => isCrossing && k.kid.visible && Math.abs(k.kid.position.x) < 4.2
           );
         }
       });
@@ -6406,17 +6929,62 @@
             const deer1 = critter('deer'); deer1.position.set(0, 0, 0);
             const deer2 = critter('deer'); deer2.position.set(1.5, 0, 1.5); deer2.rotation.y = 0.5;
             animalGrp.add(deer1, deer2);
+            const deerWalk = (deer, x, z, phase, time) => {
+                const motionScale = state.reduced ? 0.35 : 1,
+                    walkT = time * 0.22 * motionScale + phase,
+                    dx = Math.cos(walkT) * 0.22,
+                    dz = Math.cos(walkT * 0.65 + phase) * 0.12;
+                deer.position.set(x + Math.sin(walkT) * 0.8, 0, z + Math.sin(walkT * 0.65 + phase) * 0.42);
+                deer.rotation.y = Math.atan2(dx, dz);
+                const gait = time * 4.2 * motionScale + phase;
+                for (const leg of deer.userData.legs || []) {
+                    const swing = Math.sin(gait + leg.phase);
+                    leg.pivot.rotation.x = swing * 0.24;
+                    leg.lower.rotation.x = -Math.max(0, swing) * 0.12;
+                }
+                if (deer.userData.head) deer.userData.head.rotation.x = Math.sin(time * 0.5 * motionScale + phase) * 0.1;
+                if (deer.userData.tail) deer.userData.tail.rotation.x = Math.sin(time * 2 * motionScale + phase) * 0.1;
+            };
+            window.dynamicEvents.push({
+                group: animalGrp,
+                condition: (s, rain) => rain > 0.2,
+                update: (dt, time) => {
+                    deerWalk(deer1, 0, 0, 0, time);
+                    deerWalk(deer2, 1.5, 1.5, 1.8, time);
+                }
+            });
+        } else {
+            window.dynamicEvents.push({
+                group: animalGrp,
+                condition: (s, rain) => rain > 0.2
+            });
         }
         scene.add(animalGrp);
-        window.dynamicEvents.push({
-            group: animalGrp,
-            condition: (s, rain) => rain > 0.2
-        });
     });
 
     // 3. แคมป์ริมแม่น้ำและกองไฟ [ออกเฉพาะกลางคืนที่ฝนไม่ตก]
-    [0.55, 0.78].forEach(t => {
-        const o = offRoad(t, -9);
+    const campSites = [];
+    for (const targetT of [0.55, 0.78]) {
+      let best = null,
+        bestScore = Infinity;
+      for (let t = 0.54; t <= 0.83; t += 0.006) {
+        for (const side of [-1, 1]) {
+          const o = offRoad(t, side * 12);
+          if (!spotOK(o.x, o.z, 8) || !clearOfTempleSites(o.x, o.z, 26)) continue;
+          if (campSites.some(site => Math.hypot(site.x - o.x, site.z - o.z) < 38)) continue;
+          const score = Math.abs(t - targetT);
+          if (score < bestScore) {
+            best = { ...o, t, side };
+            bestScore = score;
+          }
+        }
+      }
+      if (best) {
+        taken.push([best.x, best.z, 14]);
+        campSites.push(best);
+      }
+    }
+    campSites.forEach(o => {
         const campGrp = new THREE.Group();
         campGrp.position.set(o.x, 0, o.z);
         campGrp.rotation.y = Math.atan2(o.tn.x, o.tn.z);
@@ -6587,32 +7155,158 @@
         });
     });
 
-    // 4. บอลลูนลมร้อน (Hot Air Balloon) [ออกเฉพาะกลางวันที่ฝนไม่ตก]
-    const balloonColors = [0xe63946, 0xf4a261, 0x4895ef];
-    [0.15, 0.45, 0.85].forEach((t, i) => {
-        const o = offRoad(t, 25); // ลอยอยู่ไกลๆ ริมถนน
-        const balGrp = new THREE.Group();
-        balGrp.position.set(o.x, 15 + Math.random() * 10, o.z);
-        
-        const bMesh = new THREE.Mesh(new THREE.SphereGeometry(3, 12, 10), sm2(balloonColors[i]));
-        bMesh.scale.set(1, 1.2, 1);
-        const basket = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1, 1.2), sm2(0x8a6a44));
-        basket.position.y = -4.5;
-        // เชือกผูกกระเช้า
-        for(const px of [-0.5, 0.5]) {
-            for(const pz of [-0.5, 0.5]) { cyl(0.02, 0.02, 2, sm2(0x000000), px, -3.5, pz, balGrp); }
+    // บอลลูนลมร้อนลอยเหนือถนนและสวนผลไม้ช่วง t 0.758–0.852
+    const balloonSetups = [
+      { t: 0.77, offset: -24, radius: 3.3, height: 17, color: [0xd9473f, 0xf2bd55, 0xf7e4b7] },
+      { t: 0.792, offset: 0, radius: 2.35, height: 15, color: [0x367db4, 0x77c8bb, 0xf4e8cf] },
+      { t: 0.816, offset: 27, radius: 3.7, height: 21, color: [0x7d55a4, 0xe87564, 0xffd06a] },
+      { t: 0.84, offset: -18, radius: 2.8, height: 16, color: [0x3e8b63, 0xf0a957, 0xffedcf] }
+    ];
+    balloonSetups.forEach((setup, index) => {
+      const site = offRoad(setup.t, setup.offset),
+        tangent = route.getTangent(setup.t),
+        balloon = new THREE.Group(),
+        envelope = new THREE.Group(),
+        panelCount = setup.color.length * 2,
+        panelWidth = (Math.PI * 2) / panelCount,
+        envelopeRadius = setup.radius,
+        envelopeHeight = envelopeRadius * 1.26,
+        envelopeMaterials = setup.color.map(color =>
+          new THREE.MeshStandardMaterial({ color, roughness: 0.62, metalness: 0.02, side: THREE.DoubleSide })
+        ),
+        seamMaterial = new THREE.MeshStandardMaterial({ color: 0xf5dfb4, roughness: 0.82 }),
+        basketMaterial = new THREE.MeshStandardMaterial({ color: 0x80552f, roughness: 0.94 }),
+        basketEdgeMaterial = new THREE.MeshStandardMaterial({ color: 0x49321f, roughness: 0.92 }),
+        ropeMaterial = new THREE.MeshStandardMaterial({ color: 0xd9c69b, roughness: 0.9 }),
+        burnerMaterial = new THREE.MeshStandardMaterial({ color: 0x5d6260, metalness: 0.65, roughness: 0.42 }),
+        flameMaterial = new THREE.MeshBasicMaterial({ color: 0xffb83d });
+      envelope.position.y = 0.28;
+      for (let panel = 0; panel < panelCount; panel++) {
+        const geo = new THREE.SphereGeometry(
+          1,
+          8,
+          18,
+          panel * panelWidth + 0.006,
+          panelWidth - 0.012,
+          0.025,
+          Math.PI - 0.05
+        );
+        geo.scale(envelopeRadius, envelopeHeight, envelopeRadius);
+        const mesh = new THREE.Mesh(geo, envelopeMaterials[panel % setup.color.length]);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        envelope.add(mesh);
+      }
+      const crown = new THREE.Mesh(
+        new THREE.SphereGeometry(envelopeRadius * 0.17, 12, 8),
+        seamMaterial
+      );
+      crown.position.y = envelopeHeight * 0.98;
+      crown.scale.y = 0.38;
+      envelope.add(crown);
+      for (let band = 0; band < 3; band++) {
+        const y = envelopeHeight * (-0.44 + band * 0.42),
+          ringRadius = envelopeRadius * Math.sqrt(Math.max(0.08, 1 - (y / envelopeHeight) ** 2)),
+          ring = new THREE.Mesh(
+            new THREE.TorusGeometry(ringRadius, Math.max(0.025, envelopeRadius * 0.012), 5, 48),
+            seamMaterial
+          );
+        ring.position.y = y;
+        ring.rotation.x = Math.PI / 2;
+        envelope.add(ring);
+      }
+      balloon.add(envelope);
+
+      const basketY = -envelopeHeight - 1.05,
+        basketWidth = envelopeRadius * 0.62,
+        basketDepth = envelopeRadius * 0.56,
+        basketHeight = envelopeRadius * 0.43;
+      const basket = new THREE.Group();
+      basket.position.y = basketY;
+      balloon.add(basket);
+      const basketBase = new THREE.Mesh(
+        new THREE.BoxGeometry(basketWidth * 0.92, 0.09, basketDepth * 0.92),
+        basketEdgeMaterial
+      );
+      basketBase.position.y = -basketHeight * 0.48;
+      basket.add(basketBase);
+      for (const x of [-1, 1]) {
+        for (const z of [-1, 1]) {
+          const upright = new THREE.Mesh(
+            new THREE.BoxGeometry(0.055, basketHeight, 0.055),
+            basketEdgeMaterial
+          );
+          upright.position.set(x * (basketWidth / 2 - 0.04), 0, z * (basketDepth / 2 - 0.04));
+          basket.add(upright);
         }
-        balGrp.add(bMesh, basket);
-        scene.add(balGrp);
-        
-        window.dynamicEvents.push({
-            group: balGrp,
-            condition: (s, rain) => s.night === false && rain < 0.1,
-            update: (dt, time) => { // แอนิเมชันลอยขึ้นลงและหมุนช้าๆ
-                balGrp.position.y += Math.sin(time * 0.5 + i) * dt * 0.5;
-                balGrp.rotation.y += dt * 0.1;
-            }
-        });
+      }
+      for (let slat = 0; slat < 5; slat++) {
+        const y = -basketHeight * 0.36 + slat * basketHeight * 0.17;
+        for (const side of [-1, 1]) {
+          const longSide = new THREE.Mesh(
+            new THREE.BoxGeometry(basketWidth, 0.045, 0.035),
+            slat % 2 ? basketMaterial : basketEdgeMaterial
+          );
+          longSide.position.set(0, y, side * basketDepth * 0.48);
+          basket.add(longSide);
+          const shortSide = new THREE.Mesh(
+            new THREE.BoxGeometry(0.035, 0.045, basketDepth),
+            slat % 2 ? basketEdgeMaterial : basketMaterial
+          );
+          shortSide.position.set(side * basketWidth * 0.48, y, 0);
+          basket.add(shortSide);
+        }
+      }
+      const basketRim = new THREE.Mesh(
+        new THREE.BoxGeometry(basketWidth * 1.08, 0.08, basketDepth * 1.08),
+        basketEdgeMaterial
+      );
+      basketRim.position.y = basketHeight * 0.42;
+      basket.add(basketRim);
+      const ropeTop = envelope.position.y - envelopeHeight + 0.12,
+        ropeBottom = basketY + basketHeight * 0.42,
+        ropeLength = ropeTop - ropeBottom;
+      for (const x of [-1, 1]) {
+        for (const z of [-1, 1]) {
+          const rope = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.025, 0.035, ropeLength, 6),
+            ropeMaterial
+          );
+          rope.position.set(x * basketWidth * 0.38, (ropeTop + ropeBottom) / 2, z * basketDepth * 0.38);
+          balloon.add(rope);
+        }
+      }
+      const burner = new THREE.Mesh(
+        new THREE.CylinderGeometry(envelopeRadius * 0.12, envelopeRadius * 0.19, 0.3, 10),
+        burnerMaterial
+      );
+      burner.position.set(0, basketY + basketHeight * 0.55, 0);
+      balloon.add(burner);
+      const flame = new THREE.Mesh(
+        new THREE.ConeGeometry(envelopeRadius * 0.075, envelopeRadius * 0.42, 8),
+        flameMaterial
+      );
+      flame.position.set(0, basketY + basketHeight * 0.55 + envelopeRadius * 0.3, 0);
+      balloon.add(flame);
+
+      const driftPhase = index * 1.73,
+        baseHeight = setup.height,
+        baseX = site.x,
+        baseZ = site.z;
+      balloon.position.set(baseX, baseHeight, baseZ);
+      balloon.rotation.y = Math.atan2(tangent.x, tangent.z);
+      scene.add(balloon);
+      window.dynamicEvents.push({
+        group: balloon,
+        condition: (s, rain) => s.night === false && rain < 0.1,
+        update: (dt, time) => {
+          balloon.position.x = baseX + tangent.x * Math.sin(time * 0.11 + driftPhase) * 1.5;
+          balloon.position.y = baseHeight + Math.sin(time * 0.42 + driftPhase) * 0.75;
+          balloon.position.z = baseZ + tangent.z * Math.sin(time * 0.11 + driftPhase) * 1.5;
+          balloon.rotation.y += dt * 0.035;
+          flame.scale.y = 0.75 + Math.sin(time * 8 + driftPhase) * 0.25;
+        }
+      });
     });
 
     // 5. ปรากฏการณ์แสงปริศนา (UFO ลอยเหนือทุ่งนา!) [แรร์อีเวนต์ ออกเฉพาะกลางคืน]
@@ -6694,11 +7388,12 @@
     });
 
     const songkranGroup = new THREE.Group(),
-      songkranPoint = offRoad(0.42, 12),
+      songkranPoint = offRoad(T_SCHOOL_FIELD, -22),
       songkranWater = new THREE.MeshBasicMaterial({ color: 0x8eddf3, transparent: true, opacity: 0.78 }),
       songkranDrops = [];
     songkranGroup.position.set(songkranPoint.x, 0, songkranPoint.z);
     songkranGroup.rotation.y = Math.atan2(songkranPoint.tn.x, songkranPoint.tn.z);
+    taken.push([songkranPoint.x, songkranPoint.z, 5]);
     const truckBodyMat = new THREE.MeshLambertMaterial({ color: 0x3f8d72 }),
       truckCabMat = new THREE.MeshLambertMaterial({ color: 0xe9efe2 }),
       truckWheelMat = new THREE.MeshLambertMaterial({ color: 0x292d2b });
@@ -6711,8 +7406,125 @@
       wheel.position.set(x, 0.4, z);
       songkranGroup.add(wheel);
     }
-    createSimplePerson(0xf0ad53, songkranGroup, -2.05, 0, 1.5);
-    createSimplePerson(0xe887a1, songkranGroup, 2.05, 0, 1.4);
+    const songkranPeople = [];
+    const makeSongkranPerson = (shirtColor, shortsColor, px, phase, holdingWaterGun) => {
+      const person = new THREE.Group(),
+        shirt = sm2(shirtColor),
+        shorts = sm2(shortsColor),
+        skin = sm2(0xd9a681),
+        hair = sm2(0x30231d),
+        shoe = sm2(0x3b342f),
+        white = sm2(0xfaf5e9),
+        eye = sm2(0x261d19),
+        shoulderL = new THREE.Group(),
+        shoulderR = new THREE.Group();
+      person.position.set(px, 1.16, 0.12);
+      person.scale.setScalar(0.86);
+
+      const shortsMesh = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.24, 0.22), shorts);
+      shortsMesh.position.y = 0.6;
+      const waistband = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.045, 0.225), shirt);
+      waistband.position.y = 0.73;
+      const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.17, 0.32, 4, 9), shirt);
+      torso.position.y = 0.91;
+      torso.scale.set(1, 1, 0.82);
+      const collar = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.018, 5, 9), white);
+      collar.position.set(0, 1.1, 0.005);
+      collar.rotation.x = Math.PI / 2;
+      const shirtStripe = new THREE.Mesh(new THREE.BoxGeometry(0.27, 0.045, 0.012), white);
+      shirtStripe.position.set(0, 0.92, 0.146);
+      const shirtLogo = new THREE.Mesh(new THREE.SphereGeometry(0.032, 6, 5), sm2(0xf6d36c));
+      shirtLogo.position.set(-0.085, 0.98, 0.15);
+      person.add(shortsMesh, waistband, torso, collar, shirtStripe, shirtLogo);
+
+      const legs = [];
+      for (const side of [-1, 1]) {
+        const leg = new THREE.Group();
+        leg.position.set(side * 0.1, 0.52, 0);
+        const upper = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.052, 0.24, 7), skin);
+        upper.position.y = -0.12;
+        const knee = new THREE.Mesh(new THREE.SphereGeometry(0.052, 7, 6), skin);
+        knee.position.y = -0.24;
+        const lower = new THREE.Mesh(new THREE.CylinderGeometry(0.037, 0.045, 0.22, 7), skin);
+        lower.position.y = -0.35;
+        const shoeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.055, 0.17), shoe);
+        shoeMesh.position.set(0, -0.49, 0.035);
+        leg.add(upper, knee, lower, shoeMesh);
+        person.add(leg);
+        legs.push(leg);
+      }
+
+      const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.052, 0.1, 7), skin);
+      neck.position.y = 1.13;
+      const head = new THREE.Group();
+      head.position.set(0, 1.31, 0.015);
+      const face = new THREE.Mesh(new THREE.SphereGeometry(0.13, 9, 7), skin);
+      face.scale.set(0.92, 1.08, 0.9);
+      const hairCap = new THREE.Mesh(new THREE.SphereGeometry(0.137, 9, 6), hair);
+      hairCap.scale.set(1.02, 0.52, 1.03);
+      hairCap.position.set(0, 0.055, -0.018);
+      const fringe = new THREE.Mesh(new THREE.SphereGeometry(0.075, 7, 5), hair);
+      fringe.scale.set(1.1, 0.36, 0.62);
+      fringe.position.set(0, 0.03, 0.105);
+      head.add(face, hairCap, fringe);
+      for (const side of [-1, 1]) {
+        const eyeWhite = new THREE.Mesh(new THREE.SphereGeometry(0.022, 6, 5), white);
+        eyeWhite.position.set(side * 0.045, 0.005, 0.112);
+        const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.011, 5, 4), eye);
+        pupil.position.set(side * 0.045, 0.005, 0.129);
+        const ear = new THREE.Mesh(new THREE.SphereGeometry(0.035, 6, 5), skin);
+        ear.position.set(side * 0.125, -0.015, 0);
+        head.add(eyeWhite, pupil, ear);
+      }
+      const nose = new THREE.Mesh(new THREE.SphereGeometry(0.02, 5, 4), skin);
+      nose.position.set(0, -0.035, 0.125);
+      const smile = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.009, 0.008), eye);
+      smile.position.set(0, -0.07, 0.116);
+      head.add(nose, smile);
+      person.add(neck, head);
+
+      shoulderL.position.set(-0.18, 1.04, 0.01);
+      shoulderR.position.set(0.18, 1.04, 0.01);
+      const arms = [shoulderL, shoulderR];
+      for (const [index, shoulder] of arms.entries()) {
+        const side = index === 0 ? -1 : 1;
+        const upper = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.047, 0.25, 7), shirt);
+        upper.position.set(side * 0.015, -0.12, 0);
+        const elbow = new THREE.Group();
+        elbow.position.set(side * 0.03, -0.24, 0.015);
+        const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.042, 0.24, 7), skin);
+        forearm.position.set(side * 0.035, -0.1, 0.07);
+        forearm.rotation.x = -0.55;
+        const hand = new THREE.Mesh(new THREE.SphereGeometry(0.047, 7, 5), skin);
+        hand.position.set(side * 0.055, -0.2, 0.15);
+        elbow.add(forearm, hand);
+        shoulder.add(upper, elbow);
+        person.add(shoulder);
+        shoulder.userData.elbow = elbow;
+      }
+      if (holdingWaterGun) {
+        const gunMat = sm2(0xf3cb54),
+          gun = new THREE.Group(),
+          tank = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.2, 7), sm2(0x38a7d2)),
+          barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.032, 0.23, 6), gunMat),
+          grip = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.11, 0.055), gunMat);
+        tank.rotation.z = Math.PI / 2;
+        tank.position.set(0.055, -0.12, 0.08);
+        barrel.rotation.x = Math.PI / 2;
+        barrel.position.set(0.055, -0.2, 0.25);
+        grip.position.set(0.055, -0.28, 0.16);
+        gun.add(tank, barrel, grip);
+        shoulderR.userData.elbow.add(gun);
+      }
+      person.userData.legs = legs;
+      person.userData.arms = arms;
+      person.userData.head = head;
+      person.userData.phase = phase;
+      songkranGroup.add(person);
+      songkranPeople.push(person);
+    };
+    makeSongkranPerson(0xf0ad53, 0x285574, -0.62, 0, true);
+    makeSongkranPerson(0xe887a1, 0x51436e, 0.62, 1.8, false);
     for (let i = 0; i < 12; i++) {
       const drop = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 5), songkranWater);
       drop.position.set((i % 4 - 1.5) * 0.42, 1.2 + (i % 3) * 0.32, 1.6 + Math.floor(i / 4) * 0.34);
@@ -6724,10 +7536,23 @@
     window.dynamicEvents.push({
       group: songkranGroup,
       condition: s => festivalIsActive('songkran') && !s.night,
-      update: (dt, time) => songkranDrops.forEach((drop, i) => {
-        drop.position.y = 1.05 + Math.abs(Math.sin(time * 2.3 + i * 0.8)) * 0.85;
-        drop.position.x = Math.sin(time * 1.2 + i) * 0.8;
-      })
+      update: (dt, time) => {
+        songkranDrops.forEach((drop, i) => {
+          drop.position.y = 1.05 + Math.abs(Math.sin(time * 2.3 + i * 0.8)) * 0.85;
+          drop.position.x = Math.sin(time * 1.2 + i) * 0.8;
+        });
+        songkranPeople.forEach(person => {
+          const phase = time * 5 + person.userData.phase;
+          person.position.y = 1.16 + Math.abs(Math.sin(phase * 2)) * 0.018;
+          person.userData.arms[0].rotation.z = -0.18 + Math.sin(phase) * 0.12;
+          person.userData.arms[1].rotation.z = 0.18 - Math.sin(phase) * 0.12;
+          person.userData.arms[0].rotation.x = -0.24 + Math.sin(phase) * 0.16;
+          person.userData.arms[1].rotation.x = -0.38 + Math.cos(phase) * 0.13;
+          person.userData.head.rotation.y = Math.sin(phase * 0.4) * 0.08;
+          person.userData.legs[0].rotation.x = Math.sin(phase) * 0.035;
+          person.userData.legs[1].rotation.x = -Math.sin(phase) * 0.035;
+        });
+      }
     });
 
     const templeFairGroup = new THREE.Group(),
@@ -7619,9 +8444,9 @@
     }
 
     /* ============================================================================
-     * src/scene/20-vehicle-sfx-tap.js
+     * scene/20-vehicle-sfx-tap.js
      * เสียงเอฟเฟกต์ (กริ่ง แตร ลมผ่าน) และการแตะทักทายรถ (tapVeh)
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     let pCtx = null,
@@ -7875,9 +8700,9 @@
     }
 
     /* ============================================================================
-     * src/scene/21-traffic.js
+     * scene/21-traffic.js
      * รถสวนทางและการเคลื่อนที่ของการจราจร (updateTraffic)
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     const TRAFFIC_SPEED = {
@@ -7939,24 +8764,29 @@
       return (lo + (target - cumS[lo]) / span) / LUT_N;
     }
 
-    // สร้าง Texture แสงไฟสาดพื้นถนน
+    // สร้างลำแสงไฟหน้ารถแบบเรียวและนุ่ม คล้ายกรวยแสงของไฟรถผู้เล่น
     const hlCanvas = document.createElement('canvas');
     hlCanvas.width = 256;
     hlCanvas.height = 512;
     const hlCtx = hlCanvas.getContext('2d');
-    hlCtx.clearRect(0, 0, 256, 512);
-    hlCtx.save();
-    hlCtx.scale(1, 4);
-    const hlGrd = hlCtx.createRadialGradient(128, 0, 0, 128, 0, 127);
-    hlGrd.addColorStop(0, 'rgba(255, 240, 200, 0.4)');
-    hlGrd.addColorStop(0.35, 'rgba(255, 240, 200, 0.1)');
-    hlGrd.addColorStop(1, 'rgba(255, 240, 200, 0)');
-    hlCtx.fillStyle = hlGrd;
-    hlCtx.fillRect(0, 0, 256, 128);
-    hlCtx.restore();
+    const beamFade = hlCtx.createLinearGradient(0, 0, 0, 512);
+    beamFade.addColorStop(0, 'rgba(255, 240, 200, 0.12)');
+    beamFade.addColorStop(0.35, 'rgba(255, 240, 200, 0.055)');
+    beamFade.addColorStop(1, 'rgba(255, 240, 200, 0)');
+    hlCtx.shadowColor = 'rgba(255, 240, 200, 0.12)';
+    hlCtx.shadowBlur = 36;
+    hlCtx.fillStyle = beamFade;
+    hlCtx.beginPath();
+    hlCtx.moveTo(112, 0);
+    hlCtx.lineTo(144, 0);
+    hlCtx.lineTo(256, 512);
+    hlCtx.lineTo(0, 512);
+    hlCtx.closePath();
+    hlCtx.fill();
+    hlCtx.shadowBlur = 0;
 
     const hlTex = new THREE.CanvasTexture(hlCanvas);
-    const hlGeo = new THREE.PlaneGeometry(12, 32);
+    const hlGeo = new THREE.PlaneGeometry(3.6, 32);
     hlGeo.rotateX(-Math.PI / 2);
     hlGeo.translate(0, 0.08, 16);
 
@@ -7972,9 +8802,11 @@
         depthWrite: false,
         fog: false
       });
-      const beam = new THREE.Mesh(hlGeo, beamMat);
-      beam.position.set(0, 0, L / 2);
-      g.add(beam);
+      for (const side of [-1, 1]) {
+        const beam = new THREE.Mesh(hlGeo, beamMat);
+        beam.position.set(side * 0.48, 0, L / 2);
+        g.add(beam);
+      }
 
       scene.add(g);
       return {
@@ -8023,6 +8855,7 @@
       return pool.slice(0, count);
     }
 
+    let overtakeTarget = null;
     function updateTraffic(dt) {
       const mv = state.reduced ? 0 : dt;
       window._ovt = window._ovt || 0;
@@ -8172,7 +9005,9 @@
         c.distM += deltaM * mv;
 
         // ขยายเพดานด้านหน้าเป็น 190 เพื่อรองรับคันที่ 2 ที่รอตามมาห่างๆ ไม่ให้ถูกตัดจบก่อนเข้าฉาก
-        if (c.distM < -38 || c.distM > 190) {
+        const protectingOvertakeTarget = c === overtakeTarget &&
+          ['passing', 'returning', 'abort-returning', 'blocked-following'].includes(window._ovtState);
+        if ((c.distM < -38 && !protectingOvertakeTarget) || c.distM > 190) {
           c.active = false;
           c.fa = 0;
           c.g.visible = false;
@@ -8191,7 +9026,12 @@
         c.g.visible = c.fa > 0.01;
         if (!c.g.visible) continue;
 
-        if (c.beamMat) c.beamMat.opacity = (typeof nl !== 'undefined' ? nl : 0) * c.fa * (c.sameLane ? 0.1 : 1);
+        if (c.beamMat) {
+          const nightBlend = typeof nl !== 'undefined' ? nl : 0;
+          const nightFade = nightBlend * nightBlend * (3 - 2 * nightBlend);
+          const approachFade = c.fa * c.fa * (3 - 2 * c.fa);
+          c.beamMat.opacity = nightFade * approachFade * (c.sameLane ? 0.025 : 0.18);
+        }
         if (c.pd > 0 && c.distM <= 0 && c.fa > 0.5 && !c.sameLane)
           whoosh(turn > 0.5 ? -0.6 : 0.6, Math.min(0.18, 0.05 + c.speedFactor * 0.06), c.speedFactor);
         c.pd = c.distM;
@@ -8243,13 +9083,17 @@
       // ค้นหารถคันหน้าในเลนเดียวกัน
       let frontSame = null;
       let minAheadDist = 999;
+      let trackedOvertakeTarget = null;
+      const trackingOvertake = ['passing', 'returning', 'abort-returning', 'blocked-following'].includes(window._ovtState);
       for (const c of traffic) {
-        if (!c.active || !c.sameLane || c.fa < 0.2) continue;
-        if (c.distM > -12 && c.distM < minAheadDist) {
+        if (!c.active || !c.sameLane || (c.fa < 0.2 && c !== overtakeTarget)) continue;
+        if (c === overtakeTarget && trackingOvertake && c.distM > -80) trackedOvertakeTarget = c;
+        if (c.distM > 0 && c.distM < minAheadDist) {
           minAheadDist = c.distM;
           frontSame = c;
         }
       }
+      if (!frontSame && trackedOvertakeTarget) frontSame = trackedOvertakeTarget;
 
       // ตรวจสอบว่าเลนสวนทางว่างและปลอดภัยพอที่จะแซงหรือไม่ (-12 ถึง 85 เมตร)
       let oppositeClear = true;
@@ -8261,38 +9105,66 @@
         }
       }
 
-      if (!window._ovtState) window._ovtState = 'idle'; // 'idle' | 'following' | 'passing' | 'returning'
+      if (!window._ovtState) window._ovtState = 'idle';
 
       if (frontSame) {
         const d = frontSame.distM;
         if (window._ovtState === 'passing') {
-          // กำลังแซงอยู่ในเลนสวน: แซงต่อไปจนกว่าจะพ้นหน้ารถคันนั้นไปอย่างสมบูรณ์ (> 7.5 เมตรหลังเรา)
-          if (d < -7.5) {
+          if (!oppositeClear) {
+            window._ovtState = 'abort-returning';
+          } else if (d < -7.5) {
             window._ovtState = 'returning';
           }
+        } else if (window._ovtState === 'abort-returning') {
+          if (Math.abs(window._ovt || 0) < 0.12) {
+            if (d > 0) window._ovtState = 'blocked-following';
+            else {
+              window._ovtState = 'idle';
+              overtakeTarget = null;
+            }
+          }
         } else if (window._ovtState === 'returning') {
-          // รอให้รถกลับเข้ากึ่งกลางเลนก่อน ไม่เริ่มแซงคันถัดไปซ้อนกลางจังหวะเปลี่ยนเลน
           if (Math.abs(window._ovt || 0) < 0.12) window._ovtState = 'idle';
+        } else if (window._ovtState === 'blocked-following') {
+          if (d <= 0) {
+            window._ovtState = 'idle';
+            overtakeTarget = null;
+          } else if (oppositeClear) {
+            if (d > 0 && d < 34) {
+              window._ovtState = 'passing';
+              overtakeTarget = frontSame;
+            } else {
+              window._ovtState = 'idle';
+              overtakeTarget = null;
+            }
+          }
         } else {
-          // ยังไม่ได้เริ่มแซง
           if (d > 0 && d < 34) {
             if (oppositeClear) {
-              // ถนนสวนโล่ง -> เบี่ยงเลนแซงทันที
               window._ovtState = 'passing';
+              overtakeTarget = frontSame;
             } else {
-              // มีรถสวน -> ชะลอตามท้ายโดยรักษาระยะห่างปลอดภัย ไม่จี้ตูด ไม่ทับหน้ารถ
               window._ovtState = 'following';
             }
           } else if (d <= 0 && d >= -10) {
-            // รถอยู่ข้างตัวพอดีแต่ไม่ได้อยู่ในสถานะ passing -> บังคับให้แซงต่อไปจนพ้น
-            window._ovtState = 'passing';
+            window._ovtState = oppositeClear ? 'passing' : 'blocked-following';
+            overtakeTarget = frontSame;
           } else {
             window._ovtState = 'idle';
           }
         }
       } else {
         if (window._ovtState === 'passing') {
-          window._ovtState = 'returning';
+          window._ovtState = oppositeClear ? 'returning' : 'abort-returning';
+        } else if (window._ovtState === 'blocked-following') {
+          window._ovtState = 'idle';
+          overtakeTarget = null;
+        } else if (window._ovtState === 'abort-returning' && Math.abs(window._ovt || 0) < 0.12) {
+          window._ovtState = 'idle';
+          overtakeTarget = null;
+        } else if (window._ovtState === 'returning' && Math.abs(window._ovt || 0) < 0.12) {
+          window._ovtState = 'idle';
+          overtakeTarget = null;
         }
       }
 
@@ -8301,50 +9173,55 @@
       let targetOvt = 0.0;
 
       if (window._ovtState === 'passing') {
-        // เบี่ยงออกเลนสวนเต็มตัว (2.15 เท่าของ LANE)
         targetOvt = LANE * 2.15;
-        // เพิ่มกำลังแซงอย่างชัดเจน แต่ไม่กระชากความเร็วและกล้อง
-        targetBoost = 1.48;
+        targetBoost = 1.8;
         targetBrake = 1.0;
-      } else if (window._ovtState === 'following' && frontSame) {
-        // อยู่ในเลนเดิม รอจังหวะแซง
+      } else if ((window._ovtState === 'following' || window._ovtState === 'blocked-following') && frontSame) {
         targetOvt = 0.0;
         targetBoost = 1.0;
-        // รักษาระยะห่างปลอดภัย 12.5 เมตร (หน้ากระโปรงรถจะไม่แตะหรือทับคันหน้าเด็ดขาด)
-        const safeDist = 12.5;
+        const safeDist = 14;
         if (frontSame.distM < safeDist) {
-          // ยิ่งใกล้ ยิ่งชะลอตาม
-          const factor = Math.max(0.12, (frontSame.distM - 3.5) / (safeDist - 3.5));
+          const factor = Math.max(0.12, Math.min(1, (frontSame.distM - 2) / (safeDist - 2)));
           targetBrake = Math.min(frontSame.speedFactor, frontSame.speedFactor * factor);
-          if (frontSame.distM < 8.0) {
-            targetBrake *= 0.45; // เบรกฉุกเฉินดึงระยะปลอดภัยกลับ
-          }
         } else {
           targetBrake = frontSame.speedFactor + 0.03;
         }
-      } else if (window._ovtState === 'returning') {
-        // แซงพ้นแล้ว เบี่ยงรถกลับเข้าเลนเดิมอย่างนุ่มนวล
+      } else if (window._ovtState === 'abort-returning') {
         targetOvt = 0.0;
-        targetBoost = 1.08; // คงแรงส่งเล็กน้อยระหว่างกลับเข้าเลน
+        targetBoost = 1.0;
+        if (frontSame && frontSame.distM > 0) {
+          const safeDist = 14;
+          if (frontSame.distM < safeDist) {
+            const factor = Math.max(0.12, Math.min(1, (frontSame.distM - 2) / (safeDist - 2)));
+            targetBrake = Math.min(frontSame.speedFactor, frontSame.speedFactor * factor);
+          } else {
+            targetBrake = frontSame.speedFactor + 0.03;
+          }
+        }
+      } else if (window._ovtState === 'returning') {
+        targetOvt = 0.0;
+        targetBoost = 1.05;
         targetBrake = 1.0;
         if (window._ovt < 0.12) {
           window._ovtState = 'idle';
+          overtakeTarget = null;
         }
       } else {
-        // ปกติ
         targetOvt = 0.0;
         targetBoost = 1.0;
         targetBrake = 1.0;
       }
 
       window._playerBrake += (targetBrake - window._playerBrake) * Math.min(1, dt * 3.2);
-      window._playerBoost += (targetBoost - window._playerBoost) * Math.min(1, dt * 2.6);
+      window._playerBoost += (targetBoost - window._playerBoost) * Math.min(1, dt * 4.5);
 
       const prevOvt = window._ovt || 0,
         prevOvtVelocity = window._ovtVelocity || 0,
         ovtError = targetOvt - prevOvt,
-        desiredOvtVelocity = Math.max(-3.2, Math.min(3.2, ovtError * 2.2));
-      let nextOvtVelocity = prevOvtVelocity + (desiredOvtVelocity - prevOvtVelocity) * Math.min(1, dt * 4.5),
+        emergencyReturn = window._ovtState === 'abort-returning',
+        maxOvtVelocity = emergencyReturn ? 7.5 : 3.2,
+        desiredOvtVelocity = Math.max(-maxOvtVelocity, Math.min(maxOvtVelocity, ovtError * (emergencyReturn ? 4.5 : 2.2)));
+      let nextOvtVelocity = prevOvtVelocity + (desiredOvtVelocity - prevOvtVelocity) * Math.min(1, dt * (emergencyReturn ? 8 : 4.5)),
         nextOvt = prevOvt + nextOvtVelocity * dt;
       if (ovtError === 0 || (targetOvt - nextOvt) * ovtError <= 0) {
         nextOvt = targetOvt;
@@ -8356,9 +9233,9 @@
     }
 
     /* ============================================================================
-     * src/scene/22-walkers.js
+     * scene/22-walkers.js
      * คนเดินริมทาง (walkers)
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     /* people walking along the shoulder */
@@ -8507,9 +9384,9 @@
     }
 
     /* ============================================================================
-     * src/scene/23-vendors.js
+     * scene/23-vendors.js
      * ร้านค้า/แม่ค้าริมทาง (vendors)
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     const vendors = [];
@@ -8687,18 +9564,29 @@
         ball(0.044, skinV, 0, -0.4, 0.16, armR);
         vendors.push({ g, armR, p, at: 0, cool: 0, dly: 0, k: 7, sc: 1 });
       }
-      function patch(tts, minOff, r, fn) {
-        for (const tt of tts)
-          for (let a = 0; a < 12; a++) {
-            const sd = a % 2 ? 1 : -1,
-              o = offRoad(tt, sd * (minOff + (a >> 1) * 0.9));
-            if (!spotOK(o.x, o.z, r)) continue;
-            taken.push([o.x, o.z, r]);
-            fn(o, sd);
-            return true;
+        function patch(tts, minOff, r, fn, preferredSide = 0, reservedSite = null) {
+          for (const tt of tts) {
+            const candidates = reservedSite
+              ? [{ side: reservedSite.side, offset: reservedSite.offset }]
+              : preferredSide
+              ? Array.from({ length: 6 }, (_, index) => ({
+                  side: preferredSide,
+                  offset: minOff + index * 0.9
+                }))
+              : Array.from({ length: 12 }, (_, index) => ({
+                  side: index % 2 ? 1 : -1,
+                  offset: minOff + Math.floor(index / 2) * 0.9
+                }));
+            for (const candidate of candidates) {
+              const o = offRoad(tt, candidate.side * candidate.offset);
+              if (!reservedSite && !spotOK(o.x, o.z, r)) continue;
+              taken.push([o.x, o.z, r]);
+              fn(o, candidate.side);
+              return true;
+            }
           }
-        return false;
-      }
+          return false;
+        }
       const paddyM = sm2(0x9cc7a0),
         riceM = sm2(0x9fc45a),
         riceG = sm2(0xd6c35a),
@@ -8771,9 +9659,10 @@
           g.add(m);
         }
       });
-      // วางวัด 5 แห่งตลอดเส้นทาง (ขยายให้ใหญ่ขึ้น ขยับร่นออกจากถนนเล็กน้อย พร้อมต้นโพธิ์/ต้นไทรใหญ่แนวโพลีกอน 3 ต้นรอบวัด)
+      // วางวัด 2 แห่งที่แยกกันตลอดเส้นทาง พร้อมต้นโพธิ์/ต้นไทรใหญ่แนวโพลีกอนรอบวัด
       window.__TEMPLES = [];
       const _sacredFoliageGeo = new THREE.IcosahedronGeometry(1, 0),
+        _sacredCanopyBranchGeo = new THREE.CylinderGeometry(0.055, 0.12, 1, 5),
         _sacredLeafDark = new THREE.MeshLambertMaterial({ color: 0x2f5946, flatShading: true }),
         _sacredLeafMid = new THREE.MeshLambertMaterial({ color: 0x3e7058, flatShading: true }),
         _sacredLeafLight = new THREE.MeshLambertMaterial({ color: 0x568b6c, flatShading: true }),
@@ -8830,23 +9719,35 @@
           tg.add(aerial);
         }
 
-        // 4. พุ่มใบโพลีกอนขนาดใหญ่ซ้อนหลายชั้น (Low-Poly Faceted Canopy)
-        const crowns = [
-          [0, 4.35, 0, 2.35, 1.45, 2.35, _sacredLeafDark],
-          [-1.55, 3.75, 0.65, 1.65, 1.15, 1.65, _sacredLeafMid],
-          [1.6, 3.68, -0.55, 1.6, 1.12, 1.6, _sacredLeafMid],
-          [0.45, 3.85, 1.55, 1.5, 1.08, 1.5, _sacredLeafLight],
-          [-0.55, 3.8, -1.5, 1.55, 1.1, 1.55, _sacredLeafMid],
-          [0, 5.35, 0, 1.55, 1.15, 1.55, _sacredLeafLight]
-        ];
-        crowns.forEach(([cx, cy, cz, sx, sy, sz, cm], idx) => {
-          const m = new THREE.Mesh(_sacredFoliageGeo, cm);
-          m.position.set(cx, cy, cz);
-          m.scale.set(sx, sy, sz);
-          m.rotation.set(idx * 0.7, idx * 1.1, idx * 0.4);
-          m.castShadow = idx < 2;
-          tg.add(m);
-        });
+        // 4. กิ่งโพลีกอนแผ่ออกเป็นชั้น พร้อมพุ่มใบแบนตามปลายกิ่งแทนทรงกลมซ้อน
+        for (let tier = 0; tier < 3; tier++) {
+          const y = 3.35 + tier * 0.64,
+            reach = 2.05 - tier * 0.42;
+          for (let b = 0; b < 6; b++) {
+            const angle = (b / 6) * Math.PI * 2 + tier * 0.34,
+              dx = Math.cos(angle),
+              dz = Math.sin(angle),
+              end = new THREE.Vector3(dx * reach, y + 0.38, dz * reach),
+              start = new THREE.Vector3(dx * 0.32, y - 0.28, dz * 0.32),
+              branch = new THREE.Mesh(_sacredCanopyBranchGeo, _sacredBarkM);
+            branch.position.copy(start).lerp(end, 0.5);
+            branch.scale.y = start.distanceTo(end);
+            branch.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), end.clone().sub(start).normalize());
+            branch.castShadow = tier === 0;
+            tg.add(branch);
+
+            const foliage = new THREE.Mesh(
+              _sacredFoliageGeo,
+              tier === 2 ? _sacredLeafLight : b % 3 ? _sacredLeafMid : _sacredLeafDark
+            );
+            foliage.position.copy(end);
+            foliage.scale.set(0.92 - tier * 0.12, 0.34, 0.58 - tier * 0.06);
+            foliage.rotation.y = angle;
+            foliage.rotation.z = -0.12;
+            foliage.castShadow = tier === 0;
+            tg.add(foliage);
+          }
+        }
 
         // 5. ศาลเพียงตา/แท่นวางเครื่องสักการะและไม้ค้ำโพธิ์มงคลใต้ต้นไม้ใหญ่
         if (hasShrine) {
@@ -9109,8 +10010,7 @@
         window.dynamicEvents.push({ group: nightG, condition: s => !!s.night });
       };
 
-      const templeTs = [0.14, 0.33, 0.52, 0.7, 0.842];
-      for (const tVal of templeTs)
+      TEMPLE_T_VALUES.forEach((tVal, templeIndex) =>
         patch([tVal], 30, 15, (o, sd) => {
         const g = mk(o.x, o.z);
         g.rotation.y = Math.atan2(sd * o.tn.z, -sd * o.tn.x);
@@ -9124,8 +10024,8 @@
           stone = sm2(0xc2c2c2),
           laterite = sm2(0xa65e44);
 
-        // พื้นดินผสมหญ้าใต้ลานวัดและทางเชื่อมเข้าซุ้มประตูวัด
-        addGroundPatch(g, 17.5, 19, 0, 0.5);
+        // พื้นดินสีน้ำตาลไล่เฉดขอบฟุ้งรอบลานวัด
+        addTempleDirtPatch(g, 24, 27, 0, 0.5);
         box(3.0, 0.07, 2.4, stone, 0, 0.035, 9.2, g);
         box(3.4, 0.05, 2.6, laterite, 0, 0.02, 9.2, g);
         g.userData.bigRange = true;
@@ -9221,7 +10121,8 @@
         for (const lx of [-14, -7, 0, 7, 14]) {
           taken.push([o.x + lx * cosT + 21.3 * sinT, o.z - lx * sinT + 21.3 * cosT, 12]);
         }
-      });
+      }, templeSiteCenters[templeIndex].side, templeSiteCenters[templeIndex])
+      );
       patch([0.15, 0.45, 0.76], 6.4, 2.4, (o, sd) => {
         const g = mk(o.x, o.z);
         g.rotation.y = Math.atan2(sd * o.tn.z, -sd * o.tn.x);
@@ -9639,9 +10540,9 @@
 
     
     /* ============================================================================
-     * src/scene/24-talk-bubbles.js
+     * scene/24-talk-bubbles.js
      * ฟองคำพูดของคนริมทาง (say, updateTalk, chat) และ updateWalkers
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     /* talk bubbles */
@@ -9830,9 +10731,9 @@
     }
 
     /* ============================================================================
-     * src/scene/25-memory-boxes-lanterns.js
+     * scene/25-memory-boxes-lanterns.js
      * กล่องความทรงจำริมทางและโคมลอย (refreshBoxes, release)
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     const memoryBoxes = [];
@@ -9894,9 +10795,9 @@
     }
 
     /* ============================================================================
-     * src/scene/26-theme-quality.js
+     * scene/26-theme-quality.js
      * ธีมสีตามอารมณ์/กลางคืน (theme), resize และระบบปรับคุณภาพอัตโนมัติ
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     let angle = 0,
@@ -10080,9 +10981,9 @@
     }
 
     /* ============================================================================
-     * src/scene/27-input-controls.js
+     * scene/27-input-controls.js
      * การควบคุมด้วยเมาส์/ทัช: หมุนฉาก, pinch, ล้อเมาส์, แตะ
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     const touches = new Map();
@@ -10183,10 +11084,10 @@
     // ===== ฟังก์ชันเสริมที่ 2: วิทยุคลาสสิกเปลี่ยนคลื่นได้ =====
     window.radioChannel = 0;
     const radioStations = [
-       { name: "FM 88.5: Ambient ออริจินัล", color: 0xffdf9e, em: 0xffaa44 },
-       { name: "FM 94.0: ดนตรีล้านนาประยุกต์", color: 0xc8ffc8, em: 0x44ff88 },
-       { name: "FM 102.5: กล่องดนตรี", color: 0xc8e0ff, em: 0x44aaff },
-       { name: "TAPE: เทปเสียงฝน", color: 0xffc8c8, em: 0xff4444 }
+       { name: "FM 88.5: Ambient ออริจินัล", color: 0xffdf9e },
+       { name: "FM 94.0: ดนตรีล้านนาประยุกต์", color: 0xc8ffc8 },
+       { name: "FM 102.5: กล่องดนตรี", color: 0xc8e0ff },
+       { name: "TAPE: เทปเสียงฝน", color: 0xffc8c8 }
     ];
     function changeRadioChannel() {
         window.radioChannel = (window.radioChannel + 1) % 4;
@@ -10200,11 +11101,7 @@
         
         toast(svgInline('radio') + ' ' + st.name);
         
-        // เปลี่ยนสีไฟหน้าปัดวิทยุ
-        if (window.radioGlow) {
-            window.radioGlow.color.setHex(st.color);
-            window.radioGlow.emissive.setHex(st.em);
-        }
+        renderEVDashboard(Math.round(evBattery));
         
         // หากเพลงถูกปิดอยู่ ให้กดเปิดให้อัตโนมัติเพื่อให้ได้ยินเพลง
         if (typeof mOn !== 'undefined' && !mOn) {
@@ -10241,7 +11138,7 @@
           takePolaroidPhoto();
           return;
         }
-        // 1.2 เช็ควิทยุคลาสสิก
+        // 1.2 แตะจอกลางเพื่อเปลี่ยนคลื่นวิทยุ
         if (hasTag('isRadio')) {
           changeRadioChannel();
           return;
@@ -10294,9 +11191,9 @@
     });
 
     /* ============================================================================
-     * src/scene/28-scene-api.js
+     * scene/28-scene-api.js
      * sceneAPI ที่ส่วน UI เรียกใช้ + ขั้นตอนเริ่มต้นหลังสร้างฉาก + จัดการ WebGL context หาย
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     sceneAPI = {
@@ -10304,6 +11201,41 @@
       resize,
       release,
       refresh: refreshBoxes,
+      goToRoute: targetT => {
+        if (!Number.isFinite(targetT)) return false;
+        targetT = Math.max(0, Math.min(1, targetT));
+        state.routeT = targetT;
+        window._ovt = 0;
+        window._ovtVelocity = 0;
+        window._ovtTilt = 0;
+        window._ovtState = 'idle';
+        window._playerBrake = 1;
+        window._playerBoost = 1;
+        const p = route.getPoint(targetT);
+        const tan = route.getTangent(targetT);
+        n0.set(-tan.z, 0, tan.x);
+        car.position.copy(p).addScaledVector(n0, -LANE * (1 - 2 * turn));
+        car.rotation.y = Math.atan2(tan.x, tan.z) + Math.PI * turn;
+        const camA = Math.atan2(tan.x, tan.z) + angle + Math.PI * turn;
+        camera.position.set(
+          car.position.x - Math.sin(camA) * camDist,
+          p.y + 2.4 + camDist * 0.12,
+          car.position.z - Math.cos(camA) * camDist
+        );
+        targetPoint.set(car.position.x, p.y + 1.2, car.position.z);
+        camera.lookAt(targetPoint);
+        traffic.forEach(vehicle => {
+          if (vehicle.active && Math.abs(vehicle.distM) < 40) {
+            vehicle.active = false;
+            vehicle.g.visible = false;
+          }
+        });
+        updateRouteUI();
+        state.routeUpdatedAt = Date.now();
+        persist(true);
+        drawMini(true);
+        return true;
+      },
       zoom: f => {
         if (cockpit) {
           fovC = Math.min(92, Math.max(48, fovC * f));
@@ -10340,9 +11272,9 @@
     });
 
     /* ============================================================================
-     * src/scene/29-cockpit-model.js
+     * scene/29-cockpit-model.js
      * โมเดลห้องโดยสารมุมมองคนขับ (พวงมาลัย เบาะ ปัดน้ำฝน มาตรวัด) และไฟหน้า
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     let camDist = window.innerWidth <= 768 ? 12.0 : 9.5;
@@ -10382,6 +11314,98 @@
     // ถาดวางของบุสักหลาดบนคอนโซลฝั่งซ้าย-ขวา
     box(0.56, 0.012, 0.24, dkWoodM, 0.45, 1.01, 0.72, cock);
     box(0.54, 0.008, 0.22, pm2(0x35443d), 0.45, 1.016, 0.72, cock);
+
+    // จอกลาง EV แบบจอกว้างประมาณ 14 นิ้ว ติดเหนือคอนโซลและหันเข้าหาคนขับ
+    const evDisplayCanvas = document.createElement('canvas');
+    evDisplayCanvas.width = 960;
+    evDisplayCanvas.height = 540;
+    const evDisplayCtx = evDisplayCanvas.getContext('2d'),
+      evDisplayTexture = new THREE.CanvasTexture(evDisplayCanvas);
+    evDisplayTexture.colorSpace = THREE.SRGBColorSpace;
+    const evDisplayGroup = new THREE.Group();
+    evDisplayGroup.position.set(0.02, 0.96, 0.46);
+    evDisplayGroup.rotation.x = 0.1;
+    evDisplayGroup.userData.isRadio = true;
+    cock.add(evDisplayGroup);
+    box(0.43, 0.27, 0.055, pm2(0x161b19), 0, 0, 0.025, evDisplayGroup);
+    box(0.43, 0.018, 0.012, pm2(0x161b19), 0, 0.126, -0.014, evDisplayGroup);
+    box(0.43, 0.018, 0.012, pm2(0x161b19), 0, -0.126, -0.014, evDisplayGroup);
+    box(0.018, 0.234, 0.012, pm2(0x161b19), -0.206, 0, -0.014, evDisplayGroup);
+    box(0.018, 0.234, 0.012, pm2(0x161b19), 0.206, 0, -0.014, evDisplayGroup);
+    const evDisplayGlass = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.4, 0.225),
+      new THREE.MeshBasicMaterial({ map: evDisplayTexture, toneMapped: false })
+    );
+    evDisplayGlass.position.set(0, 0, -0.024);
+    evDisplayGlass.rotation.y = Math.PI;
+    evDisplayGroup.add(evDisplayGlass);
+    box(0.045, 0.09, 0.08, dkM, -0.14, -0.18, 0.018, evDisplayGroup);
+    box(0.045, 0.09, 0.08, dkM, 0.14, -0.18, 0.018, evDisplayGroup);
+
+    function renderEVDashboard(value) {
+      const ctx = evDisplayCtx,
+        width = evDisplayCanvas.width,
+        height = evDisplayCanvas.height,
+        station = radioStations[window.radioChannel] || radioStations[0],
+        [stationBand, stationName] = station.name.split(': ');
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = '#101a18';
+      ctx.fillRect(0, 0, width, height);
+      ctx.fillStyle = '#1c2a26';
+      ctx.fillRect(0, 0, width, 112);
+      ctx.fillStyle = `#${station.color.toString(16).padStart(6, '0')}`;
+      ctx.beginPath();
+      ctx.arc(906, 49, 12, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#b6c8bd';
+      ctx.font = '600 25px "Outfit", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`♫  ${stationBand || 'TAPE'}`, 42, 39);
+      ctx.fillStyle = '#eef3ed';
+      ctx.font = '500 23px "Noto Sans Thai", sans-serif';
+      ctx.fillText(stationName || station.name, 42, 78, 790);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = `#${station.color.toString(16).padStart(6, '0')}`;
+      ctx.font = '600 22px "Noto Sans Thai", sans-serif';
+      ctx.fillText('แตะจอเพื่อเปลี่ยนคลื่น', 914, 78);
+
+      ctx.fillStyle = '#a8b8b0';
+      ctx.font = '500 26px "Noto Sans Thai", sans-serif';
+      ctx.fillText('พลังงานคงเหลือ', 46, 166);
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#f2f5ee';
+      ctx.font = '600 132px "Outfit", sans-serif';
+      ctx.fillText(String(value), 42, 302);
+      const numberWidth = ctx.measureText(String(value)).width;
+      ctx.fillStyle = '#d5e0d8';
+      ctx.font = '600 48px "Outfit", sans-serif';
+      ctx.fillText('%', 58 + numberWidth, 321);
+
+      const barX = 46,
+        barY = 380,
+        barWidth = 868,
+        barHeight = 30,
+        fillWidth = Math.max(12, (barWidth * value) / 100);
+      ctx.fillStyle = '#2c3b35';
+      ctx.beginPath();
+      ctx.roundRect(barX, barY, barWidth, barHeight, 17);
+      ctx.fill();
+      const gradient = ctx.createLinearGradient(barX, 0, barX + barWidth, 0);
+      gradient.addColorStop(0, value <= 20 ? '#dd7555' : '#7fb68b');
+      gradient.addColorStop(1, value <= 20 ? '#edaa60' : '#b8d69b');
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.roundRect(barX, barY, Math.min(barWidth, fillWidth), barHeight, 17);
+      ctx.fill();
+
+      ctx.fillStyle = '#8fa49a';
+      ctx.textAlign = 'left';
+      ctx.font = '500 20px "Noto Sans Thai", sans-serif';
+      ctx.fillText(value <= 20 ? 'พลังงานเหลือน้อย · ควรแวะพัก' : 'แบตเตอรี่พร้อมใช้งาน · เดินทางได้อย่างสบายใจ', 46, 466);
+      evDisplayTexture.needsUpdate = true;
+    }
 
     // --- 3. เรือนไมล์อนาล็อกทรงกลมวินเทจพร้อมหน้าปัดละเอียด (CanvasTexture) + แสงไฟเรืองแสงนุ่มนวลสบายตา ---
     const wipM = pm2(0x1d2622),
@@ -10448,11 +11472,11 @@
           ctx.fillText('02008', cx, cy + 31);
         } else {
           ctx.font = '700 17px "Outfit", sans-serif';
-          ctx.fillText(kind === 'temp' ? 'TEMP' : 'FUEL', cx, cy + 36);
+          ctx.fillText(kind === 'temp' ? 'TEMP' : 'POWER', cx, cy + 36);
           ctx.font = '700 16px "Outfit", sans-serif';
-          ctx.fillText(kind === 'temp' ? 'C' : 'E', cx - 44, cy + 16);
+          ctx.fillText(kind === 'temp' ? 'C' : 'RE', cx - 44, cy + 16);
           ctx.fillStyle = '#c84b31';
-          ctx.fillText(kind === 'temp' ? 'H' : 'F', cx + 44, cy + 16);
+          ctx.fillText(kind === 'temp' ? 'H' : 'PWR', cx + 44, cy + 16);
         }
         const tex = new THREE.CanvasTexture(cv);
         tex.colorSpace = THREE.SRGBColorSpace;
@@ -10460,7 +11484,7 @@
       },
       speedGaugeTex = makeGaugeFaceTex('speed'),
       tempGaugeTex = makeGaugeFaceTex('temp'),
-      fuelGaugeTex = makeGaugeFaceTex('fuel'),
+      powerGaugeTex = makeGaugeFaceTex('power'),
       gaugeM = new THREE.MeshStandardMaterial({
         map: speedGaugeTex,
         color: 0xffffff,
@@ -10477,11 +11501,11 @@
         emissiveIntensity: 0.12,
         roughness: 0.38
       }),
-      fuelGaugeM = new THREE.MeshStandardMaterial({
-        map: fuelGaugeTex,
+      powerGaugeM = new THREE.MeshStandardMaterial({
+        map: powerGaugeTex,
         color: 0xffffff,
         emissive: 0xffe4b5,
-        emissiveMap: fuelGaugeTex,
+        emissiveMap: powerGaugeTex,
         emissiveIntensity: 0.12,
         roughness: 0.38
       }),
@@ -10496,11 +11520,11 @@
     // หมวกครอบเรือนไมล์ทรงโค้งไม่บังสายตา
     box(0.44, 0.09, 0.18, cM, -0.35, 1.02, 0.59, cock);
     box(0.42, 0.075, 0.03, dkWoodM, -0.35, 0.995, 0.50, cock);
-    // หน้าปัดกลม 3 ช่อง (ซ้าย: อุณหภูมิ, กลาง: ความเร็ว, ขวา: น้ำมัน) พร้อมกระจกครอบหน้าปัดใสสะท้อนแสงอ่อนๆ
+    // หน้าปัด 3 ช่อง: อุณหภูมิภายนอก, ความเร็ว และการใช้พลังงาน EV
     for (const [gx, gr, gMat] of [
       [-0.47, 0.042, tempGaugeM],
       [-0.35, 0.056, gaugeM],
-      [-0.23, 0.042, fuelGaugeM]
+      [-0.23, 0.042, powerGaugeM]
     ]) {
       const bz = new THREE.Mesh(new THREE.CylinderGeometry(gr + 0.007, gr + 0.007, 0.018, 24), chromeTrimM);
       bz.position.set(gx, 0.995, 0.49);
@@ -10522,7 +11546,7 @@
     cock.add(speedNeedleG);
     window.speedNeedleG = speedNeedleG;
     box(0.0045, 0.044, 0.004, needleM, 0, 0.017, 0, speedNeedleG);
-    // เข็มหน้าปัดย่อยซ้าย-ขวา (อุณหภูมิเครื่องยนต์ปกติ & น้ำมันเต็มถัง)
+    // เข็มหน้าปัดย่อยซ้าย-ขวา (อุณหภูมิและพลังงานขับเคลื่อน)
     const subN1 = box(0.0038, 0.028, 0.004, needleM, -0.47, 0.995, 0.476, cock);
     subN1.rotation.z = 0.15;
     const subN2 = box(0.0038, 0.028, 0.004, needleM, -0.23, 0.995, 0.476, cock);
@@ -10558,69 +11582,94 @@
       toast(svgInline('horn') + ' ปู๊น-ปู๊น! ทักทายผู้คนระหว่างทาง ' + svgInline('wave'));
     };
 
-    // คอพวงมาลัยและก้านไฟเลี้ยว/ปัดน้ำฝน + พวงกุญแจลูกปัดไม้ล้านนาห้อยแกว่งที่สวิตช์กุญแจ
+    // คอพวงมาลัยและก้านไฟเลี้ยว/ปัดน้ำฝน
     cyl(0.034, 0.04, 0.22, dkM, -0.35, 0.94, 0.47, cock, -1.18, 0);
     cyl(0.006, 0.006, 0.12, chromeTrimM, -0.42, 0.96, 0.44, cock, 0, 0.35);
     ball(0.011, creamTrimM, -0.47, 0.98, 0.44, cock);
     cyl(0.006, 0.006, 0.12, chromeTrimM, -0.28, 0.96, 0.44, cock, 0, -0.35);
     ball(0.011, dkM, -0.23, 0.98, 0.44, cock);
-    const keyTagG = new THREE.Group();
-    keyTagG.position.set(-0.27, 0.91, 0.46);
-    cock.add(keyTagG);
-    cyl(0.008, 0.008, 0.018, chromeTrimM, 0, 0, 0, keyTagG, Math.PI / 2, 0);
-    box(0.014, 0.038, 0.004, woodTrimM, 0, -0.024, -0.006, keyTagG);
-    ball(0.007, pm2(0xd9534f), 0, -0.048, -0.006, keyTagG);
+    // ปุ่มสตาร์ต EV แบบกดแทนสวิตช์กุญแจและชุดลูกกุญแจ
+    cyl(0.034, 0.034, 0.018, chromeTrimM, -0.27, 0.91, 0.46, cock, Math.PI / 2, 0);
+    cyl(0.023, 0.023, 0.022, pm2(0x5cae78), -0.27, 0.91, 0.476, cock, Math.PI / 2, 0);
+    const evStartLabel = document.createElement('canvas');
+    evStartLabel.width = 128;
+    evStartLabel.height = 64;
+    const evStartCtx = evStartLabel.getContext('2d');
+    evStartCtx.fillStyle = '#e9fff0';
+    evStartCtx.font = '700 32px Outfit, sans-serif';
+    evStartCtx.textAlign = 'center';
+    evStartCtx.textBaseline = 'middle';
+    evStartCtx.fillText('EV', 64, 32);
+    const evStartTexture = new THREE.CanvasTexture(evStartLabel);
+    evStartTexture.colorSpace = THREE.SRGBColorSpace;
+    const evStartMark = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.038, 0.019),
+      new THREE.MeshBasicMaterial({ map: evStartTexture, transparent: true, toneMapped: false })
+    );
+    evStartMark.position.set(-0.27, 0.91, 0.489);
+    cock.add(evStartMark);
 
-    // --- 5. คอนโซลกลาง: ช่องแอร์ วิทยุเทปวินเทจเรืองแสงอบอุ่นพร้อมเข็มคลื่น & โน้ตดนตรีลอย เกียร์ และที่วางแก้ว ---
+    // --- 5. คอนโซล EV: จอกลาง วิทยุในจอ และปุ่มเลือกเกียร์ไฟฟ้า ---
     // ช่องแอร์คู่กลางพร้อมขอบโครเมียมและครีบปรับทิศทางลม
     box(0.28, 0.055, 0.02, dkM, 0.02, 0.95, 0.49, cock);
     box(0.11, 0.038, 0.024, chromeTrimM, -0.045, 0.95, 0.488, cock);
     box(0.11, 0.038, 0.024, chromeTrimM, 0.085, 0.95, 0.488, cock);
-    // วิทยุคลาสสิกพร้อมหน้าปัดคลื่นวิทยุสีเหลืองอำพัน (Warm Amber Dial) + เข็มแดงเลื่อนตามสถานี
-    const radioPropG = new THREE.Group();
-    radioPropG.position.set(0.02, 0.875, 0.49);
-    cock.add(radioPropG);
-    radioPropG.userData.isRadio = true;
-
-    const radioHitBox = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.25, 0.25), new THREE.MeshBasicMaterial({ visible: false }));
-    radioPropG.add(radioHitBox);
-    window.radioGlow = amberGlowM;
-
-    box(0.26, 0.075, 0.03, dkM, 0, 0, 0, radioPropG);
-    box(0.15, 0.026, 0.034, amberGlowM, 0, 0.013, -0.002, radioPropG);
-    // ขีดสเกลคลื่นวิทยุ + เข็มชี้คลื่นสีแดงที่ขยับตามสถานี
-    for (let rk = -3; rk <= 3; rk++) {
-      box(0.002, 0.012, 0.036, dkM, rk * 0.019, 0.013, -0.003, radioPropG);
-    }
-    const radioTuningNeedle = box(0.004, 0.024, 0.037, needleM, -0.045, 0.013, -0.004, radioPropG);
-    window.radioTuningNeedle = radioTuningNeedle;
-    box(0.11, 0.014, 0.034, chromeTrimM, 0, -0.019, -0.002, radioPropG);
-    cyl(0.014, 0.014, 0.02, chromeTrimM, -0.1, 0, -0.01, radioPropG, Math.PI / 2, 0);
-    cyl(0.014, 0.014, 0.02, chromeTrimM, 0.1, 0, -0.01, radioPropG, Math.PI / 2, 0);
-    // โน้ตดนตรีเรืองแสงลอยพลิ้วออกจากลำโพงวิทยุเมื่อเปิดเพลง
-    const radioNoteM = new THREE.MeshBasicMaterial({ color: 0xffe49e, transparent: true, opacity: 0.75 });
-    const radioNotes = [];
-    for (let ni = 0; ni < 3; ni++) {
-      const ng = new THREE.Group();
-      ball(0.007, radioNoteM, 0, 0, 0, ng, 1.2, 0.9, 0.8);
-      box(0.0025, 0.022, 0.002, radioNoteM, 0.006, 0.011, 0, ng);
-      box(0.009, 0.005, 0.002, radioNoteM, 0.01, 0.02, 0, ng).rotation.z = -0.35;
-      ng.position.set(0.02, 0.90, 0.46);
-      ng.visible = false;
-      cock.add(ng);
-      radioNotes.push({ g: ng, ph: ni * 2.1 });
-    }
+    // วิทยุและการเปลี่ยนคลื่นอยู่บนจอกลาง แตะหน้าจอเพื่อเปลี่ยนสถานี
     // ปุ่มไฟฉุกเฉินสีแดง
     box(0.022, 0.022, 0.02, pm2(0xd94b38), 0.18, 0.95, 0.49, cock);
 
-    // คอนโซลเกียร์ด้านล่าง + ถุงเกียร์หนัง + หัวเกียร์ไม้สัก
+    // ชุดเลือกเกียร์ไฟฟ้า P-R-N-D แบบปุ่ม แทนคันเกียร์และเบรกมือกลไก
     box(0.26, 0.24, 0.68, dkM, 0.02, 0.42, 0.22, cock);
-    box(0.22, 0.02, 0.62, woodTrimM, 0.02, 0.545, 0.22, cock);
-    cyl(0.045, 0.068, 0.08, cM, 0.0, 0.59, 0.34, cock);
-    cyl(0.008, 0.008, 0.18, chromeTrimM, 0.0, 0.68, 0.32, cock, -0.22, 0);
-    ball(0.028, woodTrimM, 0.0, 0.77, 0.30, cock);
-    // ด้ามเบรกมือ
-    cyl(0.012, 0.014, 0.20, dkM, 0.08, 0.59, 0.08, cock, 1.15, 0);
+    box(0.25, 0.022, 0.38, dkWoodM, 0.02, 0.553, 0.2, cock);
+    const shiftKeys = [
+      { label: 'P', color: '#b7c8bf', active: false },
+      { label: 'R', color: '#b7c8bf', active: false },
+      { label: 'N', color: '#b7c8bf', active: false },
+      { label: 'D', color: '#c9f3d4', active: true }
+    ];
+    shiftKeys.forEach(({ label, color, active }, idx) => {
+      const x = -0.073 + idx * 0.062;
+      box(0.052, 0.025, 0.072, active ? pm2(0x315b45) : pm2(0x202c28), x, 0.577, 0.19, cock);
+      box(0.044, 0.006, 0.055, active ? pm2(0x4c9c69) : pm2(0x58645e), x, 0.593, 0.19, cock);
+      const keyCanvas = document.createElement('canvas');
+      keyCanvas.width = 96;
+      keyCanvas.height = 96;
+      const keyCtx = keyCanvas.getContext('2d');
+      keyCtx.fillStyle = color;
+      keyCtx.font = '700 58px Outfit, sans-serif';
+      keyCtx.textAlign = 'center';
+      keyCtx.textBaseline = 'middle';
+      keyCtx.fillText(label, 48, 48);
+      const keyTexture = new THREE.CanvasTexture(keyCanvas);
+      keyTexture.colorSpace = THREE.SRGBColorSpace;
+      const keyLabel = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.035, 0.035),
+        new THREE.MeshBasicMaterial({ map: keyTexture, transparent: true, toneMapped: false })
+      );
+      keyLabel.position.set(x, 0.598, 0.19);
+      keyLabel.rotation.x = -Math.PI / 2;
+      cock.add(keyLabel);
+    });
+    box(0.055, 0.018, 0.042, pm2(0x35443d), 0.127, 0.574, 0.185, cock);
+    box(0.035, 0.009, 0.022, pm2(0x4e8c67), 0.127, 0.588, 0.185, cock);
+    const epbCanvas = document.createElement('canvas');
+    epbCanvas.width = 96;
+    epbCanvas.height = 64;
+    const epbCtx = epbCanvas.getContext('2d');
+    epbCtx.fillStyle = '#d7e5dc';
+    epbCtx.font = '700 28px Outfit, sans-serif';
+    epbCtx.textAlign = 'center';
+    epbCtx.textBaseline = 'middle';
+    epbCtx.fillText('P', 48, 32);
+    const epbTexture = new THREE.CanvasTexture(epbCanvas);
+    epbTexture.colorSpace = THREE.SRGBColorSpace;
+    const epbLabel = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.028, 0.018),
+      new THREE.MeshBasicMaterial({ map: epbTexture, transparent: true, toneMapped: false })
+    );
+    epbLabel.position.set(0.127, 0.594, 0.185);
+    epbLabel.rotation.x = -Math.PI / 2;
+    cock.add(epbLabel);
 
     // --- 6. พร็อพตกแต่งสร้างบรรยากาศผ่อนคลาย (Cozy Chiang Rai Road-Trip) ---
     // (6.1) แก้วกาแฟดริป/มัทฉะเชียงรายบนคอนโซล + ไอความร้อนลอยกรุ่น + แตะเพื่อยกจิบได้!
@@ -10941,9 +11990,9 @@
     scene.add(headL, headL.target);
 
     /* ============================================================================
-     * src/scene/30-windshield-fx.js
+     * scene/30-windshield-fx.js
      * เอฟเฟกต์กลางวัน/กลางคืน ไฟ ปัดน้ำฝน และหยดน้ำฝนบนกระจก (fx)
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     const dc = document.createElement('canvas');
@@ -10955,9 +12004,11 @@
       dacc = 0,
       lastPh = 0;
     function fx(dt) {
-      nl += ((state.night ? 1 : 0) - nl) * Math.min(1, dt * 2);
+      nl += ((state.night ? 1 : 0) - nl) * Math.min(1, dt * 1.35);
+      const nightBlend = nl * nl * (3 - 2 * nl);
       winM.emissiveIntensity = nl * 1.4;
-      lampM.emissiveIntensity = 0.6 + nl * 2.5; // เพิ่มความสว่างดวงไฟหน้ารถสวน
+      lampM.emissiveIntensity = 0.4 + nightBlend * 0.9;
+      lightMat.emissiveIntensity = 0.4 + nightBlend * 0.9;
       tailM.emissiveIntensity = 0.4 + nl * 1.8; // เพิ่มความสว่างดวงไฟท้ายรถสวน
       fireflies();
       roadsideWildlife();
@@ -10983,7 +12034,7 @@
       footL.intensity = cockpit ? (nl * 0.35 + duskGlow * 0.18) : 0;
       gaugeM.emissiveIntensity = 0.22 + nl * 0.85 + duskGlow * 0.35;
       if (typeof tempGaugeM !== 'undefined') tempGaugeM.emissiveIntensity = 0.22 + nl * 0.85 + duskGlow * 0.35;
-      if (typeof fuelGaugeM !== 'undefined') fuelGaugeM.emissiveIntensity = 0.22 + nl * 0.85 + duskGlow * 0.35;
+      if (typeof powerGaugeM !== 'undefined') powerGaugeM.emissiveIntensity = 0.22 + nl * 0.85 + duskGlow * 0.35;
       amberGlowM.emissiveIntensity = 0.22 + nl * 1.15 + duskGlow * 0.45;
       if (nl > 0.01) {
         const th = car.rotation.y,
@@ -11031,29 +12082,6 @@
         }
       }
 
-      // แอนิเมชันวิทยุวินเทจ: เข็มคลื่นวิทยุและตัวโน้ตลอยเมื่อเปิดเพลง
-      if (cockpit && window.radioTuningNeedle) {
-        const musicActive = typeof mOn !== 'undefined' && mOn;
-        const targetX = musicActive ? -0.02 + Math.sin(totalTime * 0.45) * 0.045 : -0.045;
-        window.radioTuningNeedle.position.x += (targetX - window.radioTuningNeedle.position.x) * Math.min(1, dt * 3);
-        if (typeof radioNotes !== 'undefined') {
-          for (let i = 0; i < radioNotes.length; i++) {
-            const rn = radioNotes[i];
-            if (!rn || !rn.g) continue;
-            if (musicActive) {
-              rn.g.visible = true;
-              const nt = (totalTime * 0.55 + rn.ph * 0.33) % 1;
-              rn.g.position.y = 0.90 + nt * 0.11;
-              rn.g.position.x = 0.02 + (i - 1) * 0.035 + Math.sin(totalTime * 3 + i * 1.7) * 0.014;
-              rn.g.rotation.z = Math.sin(totalTime * 4 + i) * 0.25;
-              rn.g.scale.setScalar(Math.sin(nt * Math.PI));
-            } else {
-              rn.g.visible = false;
-            }
-          }
-        }
-      }
-
       // แอนิเมชันน้องแมวหายใจยุบพอง + หัวใจสีชมพูลอยเมื่อลูบหัว
       if (cockpit && window.sleepingCat) {
         const breath = Math.sin(totalTime * 2.5);
@@ -11082,6 +12110,8 @@
           : 0;
         const targetNeedleAngle = -2.15 + Math.min(actualSpeed / 28, 1) * 3.8 + Math.sin(totalTime * 5.2) * 0.012;
         window.speedNeedleG.rotation.z += (targetNeedleAngle - window.speedNeedleG.rotation.z) * Math.min(1, dt * 4.5);
+        const targetPowerAngle = -0.62 + Math.min(actualSpeed / 28, 1) * 0.9;
+        subN2.rotation.z += (targetPowerAngle - subN2.rotation.z) * Math.min(1, dt * 3.5);
       }
 
       if (!cockpit) {
@@ -11129,9 +12159,9 @@
     }
 
     /* ============================================================================
-     * src/scene/31-cockpit-engine-sound.js
+     * scene/31-cockpit-engine-sound.js
      * ตัวแปรมุมมองคนขับ และเสียงเครื่องยนต์ (engineOn)
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     let cockpit = false,
@@ -11153,9 +12183,9 @@
     }
 
     /* ============================================================================
-     * src/scene/32-rain-weather.js
+     * scene/32-rain-weather.js
      * อนุภาคฝนและการเปลี่ยนอากาศ (updateWeather)
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     const RN = 420,
@@ -11200,8 +12230,8 @@
       wFog += (w[1] - wFog) * Math.min(1, dt * 0.8);
       rain.visible = wRain > 0.02;
       rainMat.opacity = 0.55 * wRain;
-      scene.fog.near = 32 - wFog * 24;
-      scene.fog.far = 92 - wFog * 52;
+      scene.fog.near = 44 - wFog * 28;
+      scene.fog.far = 138 - wFog * 66;
       if (rain.visible) {
         rain.position.set(car.position.x, 0, car.position.z);
         for (let i = 0; i < RN; i++) {
@@ -11269,7 +12299,7 @@
     }
 
     /* ============================================================================
-     * src/scene/33-minimap.js
+     * scene/33-minimap.js
      * แผนที่เต็มจอแบบ Interactive (แสดงทุกจุด + จิ้มบนถนนเพื่อวาร์ปรถ)
      * ========================================================================== */
 
@@ -11298,7 +12328,9 @@
         <div class="rmap-legend">
           <span><i class="lg-line" style="--map-color:#376951"></i>เส้นทางหลัก · 0–135 กม.</span>
           <span><i class="lg-line" style="--map-color:#b27b4f"></i>เส้นทางขึ้นดอย · 135–200 กม.</span>
-          <span><i class="lg-line lg-village"></i>ชุมชนชนบท · 136–169 กม.</span>
+          <span><i class="lg-line lg-village"></i>ชุมชนชนบท</span>
+          <span><i class="lg-field" style="display:inline-block;width:12px;height:10px;border:1px solid #6b9863;background:#a9c95a"></i>ทุ่งนา</span>
+          <span><i class="lg-dot" style="background:#2d8062"></i>จุดชาร์จ EV</span>
           <span>${svgIcon('boat')}แม่น้ำ</span>
           <span>${svgIcon('school')}โรงเรียน</span>
           <span>${svgIcon('temple')}วัด</span>
@@ -11394,7 +12426,6 @@
     // ตำแหน่งสถานที่พิเศษทั้งหมดในฉาก
     const SPECIAL_PLACES = [
       // โซนเกษตรกรรมและธรรมชาติ
-      { t: 0.61, label: 'ทุ่งนา', color: '#6b9863', type: 'zone' },
       { t: 0.705, label: 'ไร่ข้าวโพด', color: '#d9a05b', type: 'zone' },
       { t: 0.755, label: 'แม่น้ำ', color: '#2b7ea6', type: 'zone' },
       { t: 0.805, label: 'สวนผลไม้', color: '#e98f7d', type: 'zone' },
@@ -11408,17 +12439,374 @@
       // โรงเรียน
       { t: T_SCHOOL_FIELD, label: 'โรงเรียนชนบท 1', color: '#6e56af', type: 'poi' },
       { t: 0.815, label: 'โรงเรียนชนบท 2', color: '#6e56af', type: 'poi' },
-      // วัด 5 แห่ง
+      // วัด 2 แห่ง
       { t: 0.14, label: 'วัด', color: '#d49b27', type: 'poi' },
-      { t: 0.33, label: 'วัด', color: '#d49b27', type: 'poi' },
-      { t: 0.52, label: 'วัด', color: '#d49b27', type: 'poi' },
       { t: 0.70, label: 'วัด', color: '#d49b27', type: 'poi' },
-      { t: 0.842, label: 'วัด', color: '#d49b27', type: 'poi' },
       // ตลาดผลไม้ริมทาง
       { t: 0.27, label: 'ร้านผลไม้', color: '#c8553d', type: 'poi' },
       { t: 0.58, label: 'ร้านผลไม้', color: '#c8553d', type: 'poi' },
       { t: 0.83, label: 'ร้านผลไม้', color: '#c8553d', type: 'poi' }
     ];
+
+    const EV_CHARGE_MS = 90000,
+      EV_CHARGE_GAIN = 22,
+      EV_DRAIN_PER_KM = 0.12,
+      EV_ARRIVAL_DECISION_MS = 5000,
+      EV_RESCUE_BATTERY = 20,
+      EV_RESCUE_ARRIVAL_MS = 3200,
+      EV_RESCUE_CHARGE_MS = 2600,
+      EV_STATIONS = [
+        { id: 'paddy', km: 145, name: 'ทุ่งนาพักใจ', side: 1, visited: false },
+        { id: 'mountain', km: 184, name: 'จุดชมวิวภูเขา', side: -1, visited: false }
+      ].map(station => ({ ...station, t: tAt(station.km) }));
+    let evBattery = 72,
+      evStation = null,
+      evMode = 'drive',
+      evSavedSpeed = null,
+      evSavedCockpit = false,
+      evArrivalStartedAt = 0,
+      evChargeStartedAt = 0,
+      evChargeStartBattery = 0,
+      evLastUiSecond = -1,
+      evBreathPhase = '',
+      evRescueStartedAt = 0;
+    const evCameraPosition = new THREE.Vector3(),
+      evCameraTarget = new THREE.Vector3(),
+      evRescueStart = new THREE.Vector3(),
+      evRescueTarget = new THREE.Vector3(),
+      evRescueRoot = new THREE.Group();
+    {
+      const rescueBody = new THREE.MeshStandardMaterial({ color: 0xf2eee3, roughness: 0.68 }),
+        rescueAccent = new THREE.MeshStandardMaterial({ color: 0xb64c3c, roughness: 0.58 }),
+        rescueGlass = new THREE.MeshStandardMaterial({ color: 0x38545a, roughness: 0.24, metalness: 0.18 }),
+        rescueRubber = new THREE.MeshStandardMaterial({ color: 0x242724, roughness: 0.94 }),
+        rescueLight = new THREE.MeshStandardMaterial({
+          color: 0xff5142,
+          emissive: 0xff2418,
+          emissiveIntensity: 1.2,
+          roughness: 0.32
+        }),
+        rescueWheelGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.2, 12);
+      const addRescueBox = (w, h, d, material, x, y, z) => {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
+        mesh.position.set(x, y, z);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        evRescueRoot.add(mesh);
+        return mesh;
+      };
+      addRescueBox(1.95, 0.78, 3.75, rescueBody, 0, 0.78, 0);
+      addRescueBox(1.68, 0.78, 1.72, rescueBody, 0, 1.48, -0.22);
+      addRescueBox(1.48, 0.48, 0.035, rescueGlass, 0, 1.51, 0.65);
+      addRescueBox(1.48, 0.48, 0.035, rescueGlass, 0, 1.51, -1.08);
+      addRescueBox(2.0, 0.16, 0.12, rescueAccent, 0, 0.79, 1.91);
+      addRescueBox(0.26, 0.08, 0.18, rescueLight, -0.58, 0.98, 1.96);
+      addRescueBox(0.26, 0.08, 0.18, rescueLight, 0.58, 0.98, 1.96);
+      addRescueBox(0.36, 0.11, 0.42, rescueAccent, 0, 1.91, -0.12);
+      addRescueBox(0.1, 0.08, 0.34, rescueLight, -0.2, 1.99, -0.12);
+      addRescueBox(0.1, 0.08, 0.34, rescueLight, 0.2, 1.99, -0.12);
+      for (const side of [-1, 1]) {
+        for (const z of [-1.22, 1.18]) {
+          const wheel = new THREE.Mesh(rescueWheelGeo, rescueRubber);
+          wheel.position.set(side * 0.99, 0.39, z);
+          wheel.rotation.z = Math.PI / 2;
+          wheel.castShadow = true;
+          evRescueRoot.add(wheel);
+        }
+        addRescueBox(0.045, 0.36, 0.7, rescueGlass, side * 0.85, 1.48, -0.2);
+      }
+      evRescueRoot.visible = false;
+      evRescueRoot.scale.setScalar(1.1);
+      scene.add(evRescueRoot);
+    }
+
+    const evPanel = document.createElement('div');
+    evPanel.className = 'ev-stop-modal';
+    evPanel.hidden = true;
+    evPanel.innerHTML = `
+      <section class="ev-stop-card" role="dialog" aria-modal="true" aria-labelledby="evStopTitle" aria-describedby="evStopDescription">
+        <div class="ev-stop-head"><span class="ev-station-kicker">จุดชาร์จพลังใจ</span><button type="button" class="ev-exit" data-ev="resume" aria-label="ออกจากจุดพักและขับต่อ">×</button></div>
+        <h2 id="evStopTitle"></h2>
+        <p id="evStopDescription"></p>
+        <div class="ev-charge-meter"><div class="ev-charge-label"><span>แบตเตอรี่จำลอง</span><strong><span id="evChargeValue">72</span>%</strong></div><div class="ev-charge-track" role="progressbar" aria-label="ระดับแบตเตอรี่" aria-valuemin="0" aria-valuemax="100" aria-valuenow="72"><i id="evChargeFill"></i></div></div>
+        <div class="ev-breath" id="evBreath" hidden><div class="ev-breath-orb" id="evBreathOrb"><span id="evBreathLabel">หายใจเข้า</span></div><p>หายใจเข้า 4 · พัก 2 · ผ่อนลมหายใจออก 6 · พัก 2</p><small id="evChargeProgress">กำลังชาร์จอย่างนุ่มนวล · 1:30 นาที</small></div>
+        <div class="ev-stop-actions"><button type="button" class="primary" data-ev="charge">เริ่มชาร์จใจ · 90 วินาที</button><button type="button" class="secondary" data-ev="resume">ขับต่อก่อน</button></div>
+      </section>`;
+    document.body.appendChild(evPanel);
+
+    const evChargeValue = evPanel.querySelector('#evChargeValue'),
+      evChargeFill = evPanel.querySelector('#evChargeFill'),
+      evChargeTrack = evPanel.querySelector('.ev-charge-track'),
+      evTitle = evPanel.querySelector('#evStopTitle'),
+      evDescription = evPanel.querySelector('#evStopDescription'),
+      evBreath = evPanel.querySelector('#evBreath'),
+      evBreathOrb = evPanel.querySelector('#evBreathOrb'),
+      evBreathLabel = evPanel.querySelector('#evBreathLabel'),
+      evChargeProgress = evPanel.querySelector('#evChargeProgress'),
+      evChargeButton = evPanel.querySelector('[data-ev="charge"]');
+
+    function renderEVBattery() {
+      const value = Math.round(evBattery);
+      renderEVDashboard(value);
+      evChargeValue.textContent = value;
+      evChargeFill.style.width = `${value}%`;
+      evChargeTrack.setAttribute('aria-valuenow', String(value));
+    }
+
+    function resumeFromEVStation() {
+      if (evMode === 'rescue') return;
+      const restoreCamera = evMode === 'charging' || evMode === 'complete' || evMode === 'rescue-complete';
+      if (evSavedSpeed !== null) {
+        speedMul = evSavedSpeed;
+        evSavedSpeed = null;
+        setSpeedBtnLabel(speedMul);
+        $('speedBtn').setAttribute('aria-label', 'ความเร็วรถ ×' + speedMul + ' แตะเพื่อเปลี่ยน');
+        $('speedBtn').disabled = false;
+        if ($('speedLines')) $('speedLines').classList.toggle('active', speedMul >= 30);
+      }
+      evMode = 'drive';
+      if (restoreCamera) setCam(evSavedCockpit, true);
+      evStation = null;
+      evArrivalStartedAt = 0;
+      evPanel.hidden = true;
+      document.body.classList.remove('ev-charging');
+      document.body.classList.remove('ev-rescue');
+      evRescueRoot.visible = false;
+      state.routeUpdatedAt = Date.now();
+      renderEVBattery();
+      $('speedBtn').focus();
+    }
+
+    function startEVRescue(now) {
+      if (evMode !== 'drive' || evBattery > 0) return;
+      evBattery = 0;
+      evSavedSpeed = speedMul || 10;
+      evSavedCockpit = cockpit;
+      speedMul = 0;
+      setSpeedBtnLabel(0);
+      $('speedBtn').disabled = true;
+      if ($('speedLines')) $('speedLines').classList.remove('active');
+
+      const point = route.getPoint(state.routeT),
+        tangent = route.getTangent(state.routeT),
+        normal = new THREE.Vector3(-tangent.z, 0, tangent.x);
+      evRescueStart.copy(car.position).addScaledVector(tangent, -26);
+      evRescueStart.y = point.y;
+      evRescueTarget.copy(car.position).addScaledVector(normal, 4.2);
+      evRescueTarget.y = point.y;
+      evRescueRoot.position.copy(evRescueStart);
+      evRescueRoot.rotation.y = Math.atan2(tangent.x, tangent.z);
+      evRescueRoot.visible = true;
+      evRescueStartedAt = now;
+      evMode = 'rescue';
+      evStation = null;
+      evTitle.textContent = 'รถช่วยเหลือ EV กำลังมา';
+      evDescription.textContent = 'แบตเตอรี่หมดพอดี · รถฉุกเฉินกำลังนำพลังงานสำรอง 20% มาให้';
+      evPanel.querySelector('.ev-station-kicker').textContent = 'EV ROADSIDE ASSIST';
+      evChargeButton.hidden = true;
+      evBreath.hidden = true;
+      evPanel.querySelectorAll('[data-ev="resume"]').forEach(button => {
+        button.hidden = true;
+      });
+      evPanel.hidden = false;
+      document.body.classList.add('ev-rescue');
+      setCam(false, true);
+      evCameraPosition
+        .copy(car.position)
+        .addScaledVector(tangent, -17)
+        .addScaledVector(normal, 17);
+      evCameraPosition.y = point.y + 9;
+      evCameraTarget.copy(car.position).addScaledVector(normal, 1.5);
+      evCameraTarget.y = point.y + 1.3;
+      renderEVBattery();
+    }
+
+    function updateEVCharge(now) {
+      if (evMode === 'arrival') {
+        const remaining = Math.max(0, Math.ceil((EV_ARRIVAL_DECISION_MS - (now - evArrivalStartedAt)) / 1000));
+        evChargeButton.textContent = `เริ่มชาร์จใจ · ${remaining} วิ`;
+        evPanel.querySelectorAll('[data-ev="resume"]').forEach(button => {
+          if (!button.classList.contains('ev-exit')) button.textContent = `ขับต่อ (${remaining})`;
+        });
+        if (remaining === 0) {
+          toast('ไม่ได้เลือกแวะพักภายใน 5 วินาที · เดินทางต่อแล้ว');
+          resumeFromEVStation();
+        }
+        return;
+      }
+      if (evMode === 'rescue') {
+        const elapsed = Math.max(0, now - evRescueStartedAt),
+          arrivalProgress = Math.min(1, elapsed / EV_RESCUE_ARRIVAL_MS),
+          eased = arrivalProgress * arrivalProgress * (3 - 2 * arrivalProgress);
+        evRescueRoot.position.lerpVectors(evRescueStart, evRescueTarget, eased);
+        if (elapsed < EV_RESCUE_ARRIVAL_MS) {
+          evDescription.textContent = 'รถฉุกเฉินกำลังวิ่งเข้ามาช่วย · โปรดรอสักครู่';
+        } else if (elapsed < EV_RESCUE_ARRIVAL_MS + EV_RESCUE_CHARGE_MS) {
+          evDescription.textContent = 'กำลังเชื่อมต่อระบบและเติมพลังงานฉุกเฉิน…';
+        } else {
+          evBattery = Math.min(100, EV_RESCUE_BATTERY);
+          evMode = 'rescue-complete';
+          evTitle.textContent = 'เดินทางต่อได้แล้ว';
+          evDescription.textContent = 'รถช่วยเหลือเติมพลังงานฉุกเฉินให้ 20% · เดินทางต่ออัตโนมัติ';
+          renderEVBattery();
+          toast('รับพลังงานฉุกเฉิน 20% แล้ว · เดินทางต่อได้เลย');
+          resumeFromEVStation();
+        }
+        return;
+      }
+      if (evMode !== 'charging') return;
+      const elapsed = Math.max(0, now - evChargeStartedAt),
+        progress = Math.min(1, elapsed / EV_CHARGE_MS);
+      evBattery = Math.min(100, evChargeStartBattery + EV_CHARGE_GAIN * progress);
+      const seconds = Math.floor(elapsed / 1000),
+        phase = seconds % 14,
+        phaseName = phase < 4 ? 'inhale' : phase < 6 ? 'hold-in' : phase < 12 ? 'exhale' : 'hold-out',
+        phaseLabel = phase < 4 ? 'หายใจเข้า' : phase < 6 ? 'พักเบา ๆ' : phase < 12 ? 'ผ่อนลมหายใจออก' : 'พักก่อนเริ่มใหม่';
+      if (phaseName !== evBreathPhase) {
+        evBreathPhase = phaseName;
+        evBreathOrb.dataset.phase = phaseName;
+        evBreathLabel.textContent = phaseLabel;
+      }
+      if (seconds !== evLastUiSecond) {
+        evLastUiSecond = seconds;
+        const remaining = Math.max(0, Math.ceil((EV_CHARGE_MS - elapsed) / 1000));
+        evChargeProgress.textContent =
+          progress >= 1
+            ? 'พักได้เท่านี้ก็เพียงพอแล้ว · แบตเตอรี่ไม่จำเป็นต้องเต็ม'
+            : `กำลังชาร์จอย่างนุ่มนวล · เหลือ ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')} นาที`;
+        renderEVBattery();
+      }
+      if (progress >= 1) {
+        evMode = 'complete';
+        evTitle.textContent = 'ชาร์จใจครบแล้ว';
+        evDescription.textContent = `คุณได้พักที่${evStation.name} · รับพลังเพิ่ม ${Math.round(evBattery - evChargeStartBattery)}% แล้ว`;
+        evChargeButton.hidden = true;
+        evPanel.querySelectorAll('[data-ev="resume"]').forEach(button => {
+          button.textContent = button.classList.contains('ev-exit') ? '×' : 'ขับต่อเมื่อพร้อม';
+        });
+      }
+    }
+
+    function openEVStation(station) {
+      evStation = station;
+      station.visited = true;
+      evArrivalStartedAt = Date.now();
+      evSavedSpeed = speedMul || 10;
+      speedMul = 0;
+      setSpeedBtnLabel(0);
+      $('speedBtn').disabled = true;
+      if ($('speedLines')) $('speedLines').classList.remove('active');
+      evMode = 'arrival';
+      evTitle.textContent = station.name;
+      evDescription.textContent = 'เลือกชาร์จใจหรือขับต่อภายใน 5 วินาที · หากยังไม่เลือก รถจะเดินทางต่ออัตโนมัติ';
+      evPanel.querySelector('.ev-station-kicker').textContent = 'จุดชาร์จพลังใจ';
+      evChargeButton.hidden = false;
+      evChargeButton.textContent = 'เริ่มชาร์จใจ · 5 วิ';
+      evPanel.querySelectorAll('[data-ev="resume"]').forEach(button => {
+        button.hidden = false;
+        button.textContent = button.classList.contains('ev-exit') ? '×' : 'ขับต่อก่อน';
+      });
+      evBreath.hidden = true;
+      evPanel.hidden = false;
+      renderEVBattery();
+      evChargeButton.focus();
+    }
+
+    evPanel.querySelectorAll('[data-ev="resume"]').forEach(button => {
+      button.addEventListener('click', resumeFromEVStation);
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !evPanel.hidden && evMode !== 'rescue') resumeFromEVStation();
+    });
+    evChargeButton.addEventListener('click', () => {
+      if (evMode !== 'arrival' || !evStation) return;
+      evSavedCockpit = cockpit;
+      evChargeStartBattery = evBattery;
+      evChargeStartedAt = Date.now();
+      evArrivalStartedAt = 0;
+      evChargeButton.textContent = 'เริ่มชาร์จใจ · 90 วินาที';
+      evLastUiSecond = -1;
+      evBreathPhase = '';
+      evMode = 'charging';
+      evTitle.textContent = 'วางความเหนื่อยไว้ข้างทาง';
+      evDescription.textContent = 'มองวิวไกล ๆ แล้วค่อย ๆ หายใจไปพร้อมกับวงแสง';
+      evBreath.hidden = false;
+      evChargeButton.hidden = true;
+      evPanel.querySelectorAll('[data-ev="resume"]').forEach(button => {
+        button.textContent = button.classList.contains('ev-exit') ? '×' : 'พอแล้ว · ขับต่อ';
+      });
+      document.body.classList.add('ev-charging');
+      setCam(false, true);
+      const point = route.getPoint(evStation.t),
+        tangent = route.getTangent(evStation.t),
+        normal = new THREE.Vector3(-tangent.z, 0, tangent.x);
+      evCameraPosition
+        .copy(point)
+        .addScaledVector(tangent, -15)
+        .addScaledVector(normal, evStation.side * 34);
+      evCameraPosition.y = point.y + 24;
+      evCameraTarget.copy(point).addScaledVector(tangent, 28);
+      evCameraTarget.y = point.y + 7;
+      updateEVCharge(evChargeStartedAt);
+    });
+
+    EV_STATIONS.forEach(station => {
+      const targetT = station.t,
+        offsets = [0];
+      for (let step = 1; step <= 24; step++) offsets.push(step * 0.002, -step * 0.002);
+      let site = null;
+      for (const delta of offsets) {
+        const t = Math.max(0.02, Math.min(0.98, targetT + delta));
+        for (const side of [station.side, -station.side]) {
+          for (const setback of [12, 16, 20, 24, 28, 32]) {
+            const candidate = offRoad(t, side * setback);
+            if (
+              !spotOK(candidate.x, candidate.z, 8) ||
+              !clearOfTempleSites(candidate.x, candidate.z, 24)
+            ) continue;
+            site = { ...candidate, t, side };
+            break;
+          }
+          if (site) break;
+        }
+        if (site) break;
+      }
+      if (!site) throw new Error(`Unable to place EV station "${station.id}" outside reserved scene areas`);
+      station.t = site.t;
+      station.side = site.side;
+      taken.push([site.x, site.z, 9]);
+      const point = route.getPoint(station.t),
+        tangent = route.getTangent(station.t),
+        root = new THREE.Group(),
+        padMat = new THREE.MeshStandardMaterial({ color: 0x718078, roughness: 0.92 }),
+        lineMat = new THREE.MeshStandardMaterial({ color: 0xf0e3ae, roughness: 0.8 }),
+        postMat = new THREE.MeshStandardMaterial({ color: 0xf5f2e7, roughness: 0.55 }),
+        greenMat = new THREE.MeshStandardMaterial({ color: 0x2d8062, emissive: 0x1b654b, emissiveIntensity: 0.35 }),
+        screenMat = new THREE.MeshStandardMaterial({ color: 0x8dd3ca, emissive: 0x328c84, emissiveIntensity: 0.65 });
+      root.position.set(site.x, point.y, site.z);
+      root.rotation.y = Math.atan2(tangent.x, tangent.z);
+      const addBox = (w, h, d, material, x, y, z) => {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
+        mesh.position.set(x, y, z);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        root.add(mesh);
+        return mesh;
+      };
+      addBox(7.5, 0.14, 12, padMat, 0, 0.07, 0);
+      addBox(0.13, 0.025, 7.8, lineMat, -2.7, 0.155, 0);
+      addBox(0.13, 0.025, 7.8, lineMat, 2.7, 0.155, 0);
+      addBox(0.8, 1.45, 0.55, postMat, 2.45, 0.87, -2.1);
+      addBox(0.52, 0.34, 0.045, screenMat, 2.45, 1.22, -1.79);
+      addBox(0.24, 0.07, 0.06, greenMat, 2.45, 0.78, -1.79);
+      addBox(3.9, 0.18, 3.2, postMat, 0, 3.15, -1.5);
+      for (const x of [-1.75, 1.75]) addBox(0.12, 3, 0.12, greenMat, x, 1.62, -1.5);
+      const light = new THREE.PointLight(0x9fe5ca, 1.2, 8);
+      light.position.set(2.45, 1.6, -2.1);
+      root.add(light);
+      scene.add(root);
+      station.position = root.position.clone();
+    });
 
     function buildMapBase() {
       let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
@@ -11518,60 +12906,24 @@
         c.restore();
       });
 
-      const drawLandPatch = (t, side, color, pattern) => {
-        const p = route.getPoint(t);
-        const tangent = route.getTangent(t);
-        const [px, py] = mproj(p.x + tangent.z * side, p.z - tangent.x * side);
-        c.save();
-        c.translate(px, py);
-        c.rotate(Math.atan2(tangent.x, tangent.z));
-        c.fillStyle = 'rgba(47, 67, 43, 0.16)';
-        c.beginPath();
-        c.ellipse(2, 5, 50, 28, 0, 0, Math.PI * 2);
-        c.fill();
+      const drawRicePlot = (x, z, width, depth, color) => {
+        const [px, py] = mproj(x, z),
+          w = width * mapBox.k,
+          h = depth * mapBox.k;
         c.fillStyle = color;
-        c.beginPath();
-        c.ellipse(0, 0, 47, 26, 0, 0, Math.PI * 2);
-        c.fill();
-        c.strokeStyle = 'rgba(87, 130, 76, 0.34)';
-        c.lineWidth = 1.5;
-        c.stroke();
-        const fieldLight = c.createLinearGradient(-38, -25, 35, 25);
-        fieldLight.addColorStop(0, 'rgba(255,255,255,0.32)');
-        fieldLight.addColorStop(1, 'rgba(49,83,47,0.08)');
-        c.fillStyle = fieldLight;
-        c.beginPath();
-        c.ellipse(-1, -2, 43, 22, 0, 0, Math.PI * 2);
-        c.fill();
-        c.save();
-        c.beginPath();
-        c.ellipse(0, 0, 45, 24, 0, 0, Math.PI * 2);
-        c.clip();
-        if (pattern === 'field') {
-          c.strokeStyle = 'rgba(91, 143, 69, 0.32)';
-          c.lineWidth = 2;
-          for (let x = -44; x <= 44; x += 10) {
-            c.beginPath(); c.moveTo(x, -25); c.lineTo(x, 25); c.stroke();
-          }
-          for (let y = -24; y <= 24; y += 9) {
-            c.beginPath(); c.moveTo(-48, y); c.lineTo(48, y); c.stroke();
-          }
-        } else {
-          c.fillStyle = pattern === 'orchard' ? '#4f8d50' : '#c39a45';
-          for (let x = -36; x <= 36; x += 13) {
-            for (let y = -15; y <= 15; y += 12) {
-              c.beginPath(); c.arc(x, y, 3.5, 0, Math.PI * 2); c.fill();
-            }
-          }
-        }
-        c.restore();
-        c.restore();
+        c.fillRect(px - w / 2, py - h / 2, w, h);
+        c.strokeStyle = 'rgba(72, 111, 63, 0.55)';
+        c.lineWidth = 1;
+        c.strokeRect(px - w / 2, py - h / 2, w, h);
       };
-
-      drawLandPatch(0.61, 43, '#d3e6ae', 'field');
-      drawLandPatch(0.70, -48, '#efe0a1', 'corn');
-      drawLandPatch(0.81, 42, '#c5dfad', 'orchard');
-      drawLandPatch(0.89, -43, '#b9d8a7', 'orchard');
+      MAP_RICE_FIELDS.forEach(q => {
+        const color = `#${q.c.toString(16).padStart(6, '0')}`;
+        drawRicePlot(q[0], q[1], 14.4, 14.4, color);
+      });
+      PADS.forEach(([group, ripe]) => {
+        const position = group.getWorldPosition(new THREE.Vector3());
+        drawRicePlot(position.x, position.z, 8.5, 11, ripe ? '#d9c25a' : '#8fbf5a');
+      });
 
       c.lineCap = c.lineJoin = 'round';
       const drawRoadSegment = (a, b, w, col, dash = []) => {
@@ -11688,10 +13040,10 @@
       drawRoadSegment(Math.round(T0 * MAP_SAMPLES), Math.round(T1 * MAP_SAMPLES), 11, '#376951');
       drawRoadSegment(Math.round(T1 * MAP_SAMPLES), Math.round(T3 * MAP_SAMPLES), 9, '#b27b4f');
 
-      // เน้นช่วงที่มีบ้านชนบท และปักหมุดบ้านให้เห็นได้ชัดบนแผนที่
-      {
-        const villageStart = tAt(136),
-          villageEnd = tAt(169);
+      // วาดตำแหน่งบ้านจริงและไฮไลต์ถนนช่วงชุมชนตามตำแหน่งที่สร้างในฉาก
+      if (VILLAGE_HOUSES.length) {
+        const villageStart = Math.min(...VILLAGE_HOUSES.map(house => house.t)),
+          villageEnd = Math.max(...VILLAGE_HOUSES.map(house => house.t));
         c.save();
         c.beginPath();
         for (let i = 0; i <= 100; i++) {
@@ -11709,10 +13061,8 @@
         c.stroke();
         c.setLineDash([]);
 
-        const drawVillageHouse = (t, side) => {
-          const p = route.getPoint(t),
-            tangent = route.getTangent(t),
-            [x, y] = mproj(p.x + tangent.z * side * 19, p.z - tangent.x * side * 19);
+        const drawVillageHouse = house => {
+          const [x, y] = mproj(house.x, house.z);
           c.fillStyle = 'rgba(35, 57, 39, 0.18)';
           c.fillRect(x - 7, y + 5, 16, 3);
           c.fillStyle = '#f3e7c9';
@@ -11727,7 +13077,7 @@
           c.fillStyle = '#6f8f62';
           c.fillRect(x - 2, y + 1, 4, 5);
         };
-        [139, 147, 155, 163, 168].forEach((km, i) => drawVillageHouse(tAt(km), i % 2 ? -1 : 1));
+        VILLAGE_HOUSES.forEach(drawVillageHouse);
 
         c.restore();
       }
@@ -11837,10 +13187,15 @@
 
       // วาดสถานที่พิเศษ (7-11, โรงเรียน, วัด, โซนเกษตร)
       SPECIAL_PLACES.forEach(sp => {
-        const p = route.getPoint(sp.t);
+        const temple = sp.label === 'วัด'
+          ? window.__TEMPLES?.find(site => Math.abs(site.t - sp.t) < 0.001)
+          : null;
+        const p = temple || route.getPoint(sp.t);
         const [qx, qy] = mproj(p.x, p.z);
         if (sp.type === 'zone') {
           drawMapLabel(sp.label, qx, qy, sp.color);
+        } else if (sp.label === 'วัด') {
+          return;
         } else {
           c.beginPath();
           c.arc(qx, qy, 5, 0, Math.PI * 2);
@@ -11854,11 +13209,38 @@
         }
       });
 
+      EV_STATIONS.forEach(station => {
+        const [x, y] = mproj(station.position.x, station.position.z);
+        c.beginPath();
+        c.arc(x, y, 10, 0, Math.PI * 2);
+        c.fillStyle = '#e6f4ec';
+        c.fill();
+        c.lineWidth = 2.5;
+        c.strokeStyle = '#2d8062';
+        c.stroke();
+        c.fillStyle = '#2d8062';
+        c.beginPath();
+        c.moveTo(x + 2, y - 7);
+        c.lineTo(x - 4, y + 1);
+        c.lineTo(x, y + 1);
+        c.lineTo(x - 2, y + 7);
+        c.lineTo(x + 5, y - 2);
+        c.lineTo(x + 1, y - 2);
+        c.closePath();
+        c.fill();
+        drawMapLabel(`⚡ ${station.name}`, x, y, '#2d8062');
+      });
+
       const drawBuilding = (t, side, kind, color) => {
         const p = route.getPoint(t);
         const tangent = route.getTangent(t);
-        const [x, y] = mproj(p.x + tangent.z * side, p.z - tangent.x * side);
-        const w = kind === 'school' ? 23 : kind === 'temple' ? 19 : 21;
+        const temple = kind === 'temple'
+          ? window.__TEMPLES?.find(site => Math.abs(site.t - t) < 0.001)
+          : null;
+        const [x, y] = temple
+          ? mproj(temple.x, temple.z)
+          : mproj(p.x + tangent.z * side, p.z - tangent.x * side);
+        const w = kind === 'school' ? 23 : kind === 'temple' ? 25 : 21;
         const h = kind === 'school' ? 13 : 11;
         c.fillStyle = 'rgba(28, 48, 34, 0.2)';
         c.beginPath();
@@ -11893,12 +13275,29 @@
           c.beginPath(); c.arc(x - 4, y, 3, 0, Math.PI * 2); c.arc(x + 3, y, 3, 0, Math.PI * 2); c.fill();
         }
       };
-      [[0.14, 24, 'temple', '#d2a43c'], [0.33, -24, 'temple', '#d2a43c'],
-        [0.52, 26, 'temple', '#d2a43c'], [0.70, -24, 'temple', '#d2a43c'],
-        [0.842, 24, 'temple', '#d2a43c']].forEach(([t, side, kind, color]) => drawBuilding(t, side, kind, color));
+      [[0.14, -24, 'temple', '#d2a43c'], [0.70, -24, 'temple', '#d2a43c']]
+        .forEach(([t, side, kind, color]) => drawBuilding(t, side, kind, color));
       [[T_SCHOOL_FIELD, 30, 'school', '#b84b3b'], [0.81, 30, 'school', '#b84b3b']].forEach(([t, side, kind, color]) => drawBuilding(t, side, kind, color));
       [0.016].forEach(t => drawBuilding(t, -25, 'store', '#e87c36'));
       [0.27, 0.58, 0.83].forEach(t => drawBuilding(t, -23, 'market', '#d77b47'));
+      window.__TEMPLES?.forEach(temple => {
+        const [x, y] = mproj(temple.x, temple.z);
+        c.beginPath();
+        c.arc(x, y, 10, 0, Math.PI * 2);
+        c.fillStyle = '#fff7df';
+        c.fill();
+        c.lineWidth = 2.5;
+        c.strokeStyle = '#d49b27';
+        c.stroke();
+        c.fillStyle = '#b83c2e';
+        c.beginPath();
+        c.moveTo(x - 6, y - 1);
+        c.lineTo(x, y - 8);
+        c.lineTo(x + 6, y - 1);
+        c.closePath();
+        c.fill();
+        drawMapLabel('วัด', x, y, '#d49b27');
+      });
 
       mapBase = cv;
     }
@@ -12116,6 +13515,7 @@
 
       // 4. อัปเดตชื่อสถานที่ เซฟข้อมูล และปิดแผนที่
       updateRouteUI();
+      state.routeUpdatedAt = Date.now();
       persist(true);
       drawMini(true);
 
@@ -12136,15 +13536,17 @@
     });
 
     /* ============================================================================
-     * src/scene/34-camera-switch.js
+     * scene/34-camera-switch.js
      * สลับกล้องมุมมองคนขับ/มุมสูง (setCam, ปุ่ม V)
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
-    function setCam(on) {
+    function setCam(on, silent = false) {
+      if ((evMode === 'charging' || evMode === 'rescue') && on) return;
       cockpit = on;
       cock.visible = on;
       car.visible = !on;
+      renderEVBattery();
       if (on) {
         pitch = -0.025;
         targetAngle = 0;
@@ -12176,11 +13578,12 @@
         camera.fov = 40;
       }
       camera.updateProjectionMatrix();
-      toast(
-        on
-          ? `${svgInline('car')} มุมมองในรถ: ลากมองรอบๆ · คลิก ${svgInline('radio')}วิทยุ ${svgInline('coffee')}กาแฟ ${svgInline('cat')}แมว ${svgInline('camera')}กล้อง ${svgInline('horn')}แตร ${svgInline('visor')}ที่บังแดด`
-          : 'มุมมองนอกรถ'
-      );
+      if (!silent)
+        toast(
+          on
+            ? `${svgInline('car')} มุมมองในรถ: ลากมองรอบๆ · คลิก ${svgInline('radio')}วิทยุ ${svgInline('coffee')}กาแฟ ${svgInline('cat')}แมว ${svgInline('camera')}กล้อง ${svgInline('horn')}แตร ${svgInline('visor')}ที่บังแดด`
+            : 'มุมมองนอกรถ'
+        );
     }
 
     $('camBtn').onclick = () => setCam(!cockpit);
@@ -12202,9 +13605,9 @@
     });
 
     /* ============================================================================
-     * src/scene/35-main-loop.js
+     * scene/35-main-loop.js
      * ลูปหลักของฉาก frame(): ขับรถ กล้อง แสง และอัปเดตทุกระบบ
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     /* ============================================================================
@@ -12458,18 +13861,18 @@
 
         // แนวต้นไม้และกอไผ่ฝั่งตรงข้าม (ฉากหลังให้แม่น้ำดูร่มรื่น)
         const trunkG = new THREE.CylinderGeometry(0.16, 0.26, 2.6, 5).translate(0, 1.3, 0),
-          crownG = new THREE.IcosahedronGeometry(1, 1).scale(1.35, 1.15, 1.3).translate(0, 3.65, 0),
+          crownG = new THREE.IcosahedronGeometry(1, 1).scale(1.35, 0.42, 1.3).translate(0, 3.65, 0),
           TC = 110,
           trunks = new THREE.InstancedMesh(trunkG, new THREE.MeshLambertMaterial({ color: 0x7d6648 }), TC),
           crowns = new THREE.InstancedMesh(crownG, new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true }), TC * 6),
           c = new THREE.Color();
         const canopyBlobs = [
-          [0, 0, 0, 1.08, 1.04, 1.08],
-          [1.05, 0.16, 0.12, 0.78, 0.76, 0.8],
-          [-1.0, 0.2, -0.08, 0.82, 0.82, 0.78],
-          [0.18, 0.22, 1.02, 0.8, 0.78, 0.82],
-          [-0.12, 0.12, -0.98, 0.76, 0.82, 0.78],
-          [0.08, 0.92, 0.02, 0.72, 0.68, 0.74]
+          [0, 0, 0, 0.92, 0.42, 0.96],
+          [1.1, 0.1, 0.12, 0.68, 0.3, 0.72],
+          [-1.08, 0.16, -0.08, 0.7, 0.32, 0.68],
+          [0.18, 0.08, 1.08, 0.66, 0.3, 0.7],
+          [-0.12, 0.12, -1.02, 0.64, 0.32, 0.66],
+          [0.08, 0.48, 0.02, 0.62, 0.28, 0.64]
         ];
         let tcount = 0, crownCount = 0;
         for (let i = 1; i < N - 1 && tcount < TC; i++) {
@@ -13315,6 +14718,7 @@
       }
 
       let dt = Math.min(frameMs / 1000, 0.05);
+      let evBatteryDepleted = false;
       samplePerformance(frameMs);
       totalTime += dt;
       if (state.night || !window._schoolCrossingActive) {
@@ -13334,7 +14738,8 @@
                 route.getPoint(state.routeT).distanceTo(route.getPoint((state.routeT + 0.002) % 1)) / 0.002
               )),
               (((dirT * dt * effSpeedMul * KMH) / 3600) * ARCJ) / KM_TOTAL / DS);
-          let nextRouteT = state.routeT + sp;
+          let nextRouteT = state.routeT + sp,
+            reachedEVStation = null;
           if (dirT > 0 && !state.night && window._schoolCrossingActive) {
             const stopT = window._schoolCrossingStopT;
             const crossingT = window._schoolCrossingT;
@@ -13353,6 +14758,30 @@
           } else {
             window._schoolCrossingStopped = false;
           }
+          if (dirT > 0 && evMode === 'drive') {
+            reachedEVStation = EV_STATIONS.find(station => !station.visited && pT < station.t && nextRouteT >= station.t) || null;
+            if (reachedEVStation) nextRouteT = reachedEVStation.t;
+          }
+          if (dirT > 0 && pT < T3 && nextRouteT > T0) {
+            const from = Math.max(T0, pT),
+              to = Math.min(T3, nextRouteT),
+              previousBattery = Math.round(evBattery),
+              distanceKm = to > from ? kmAt(to) - kmAt(from) : 0,
+              availableKm = evBattery / EV_DRAIN_PER_KM;
+            if (distanceKm >= availableKm && distanceKm > 0) {
+              const depletionT = tAt(Math.min(KM_TOTAL, kmAt(from) + availableKm));
+              if (depletionT <= nextRouteT) {
+                nextRouteT = Math.max(pT, depletionT);
+                reachedEVStation = null;
+                evBattery = 0;
+                evBatteryDepleted = true;
+              }
+            } else if (distanceKm > 0) {
+              evBattery = Math.max(0, evBattery - distanceKm * EV_DRAIN_PER_KM);
+            }
+            if (Math.round(evBattery) !== previousBattery) renderEVBattery();
+          }
+          if (nextRouteT !== state.routeT) state.routeUpdatedAt = Date.now();
           state.routeT = nextRouteT;
           if (pT < T1 && state.routeT >= T1)
             toast('ถึงเวียงแก่นแล้ว · เส้นทางต่อไปดอยผาตั้งและภูชี้ฟ้า');
@@ -13365,8 +14794,10 @@
           else if (state.routeT < 0) state.routeT += 1;
           if (state.routeT >= pT) storyCheck(pT, state.routeT);
           updateRouteUI();
+          if (reachedEVStation) openEVStation(reachedEVStation);
         }
       }
+      updateEVCharge(Date.now());
       const driveCurve = route,
         driveT = state.routeT,
         p = driveCurve.getPoint(driveT),
@@ -13377,6 +14808,7 @@
       car.position.y = Math.sin(totalTime * 7) * 0.015;
       const ovtTiltAngle = (turn > 0.5 ? -1 : 1) * Math.max(-0.06, Math.min(0.06, (window._ovtTilt || 0) * 0.035));
       car.rotation.y = Math.atan2(tan.x, tan.z) + Math.PI * turn + ovtTiltAngle;
+      if (evBatteryDepleted) startEVRescue(Date.now());
       {
         // ล้อหมุนตามความเร็วจริงของรถ: เร่งแซงหมุนเร็วขึ้น ชะลอตามท้ายคันหน้าก็หมุนช้าลงตามจังหวะรถ
         const _bo = window._playerBoost || 1,
@@ -13413,9 +14845,6 @@
         if (typeof tungG !== 'undefined') {
           tungG.rotation.z += (swayForce * 0.85 + Math.cos(totalTime * 2.8) * 0.03 - tungG.rotation.z) * Math.min(1, dt * 5);
           tungG.rotation.y = Math.sin(totalTime * 1.5) * 0.35;
-        }
-        if (typeof keyTagG !== 'undefined') {
-          keyTagG.rotation.z += (-swG.rotation.z * 0.35 + Math.sin(totalTime * 5.2) * 0.06 - keyTagG.rotation.z) * Math.min(1, dt * 6);
         }
         plantLeavesG.rotation.z = Math.sin(totalTime * 3.8) * 0.04 - swG.rotation.z * 0.08;
 
@@ -13473,6 +14902,13 @@
         camera.position.lerp(desiredCamera, totalTime < 0.1 ? 1 : Math.min(1, dt * 4));
         targetPoint.set(car.position.x, p.y + 1.2, car.position.z);
         camera.lookAt(targetPoint);
+      }
+      if (evMode === 'charging' || evMode === 'rescue') {
+        camera.up.set(0, 1, 0);
+        camera.position.lerp(evCameraPosition, Math.min(1, dt * 1.4));
+        camera.fov += (55 - camera.fov) * Math.min(1, dt * 1.2);
+        camera.updateProjectionMatrix();
+        camera.lookAt(evCameraTarget);
       }
       camera.updateMatrixWorld();
       placeBubble();
@@ -13571,10 +15007,10 @@
           u.wr.rotation.z = -flap;
         });
         updateWireBirds(dt, totalTime, cx0, cz0);
-        animals.forEach((a, i) => {
-          if (a.visible) animAnimal(a, i); // คำนวณแอนิเมชันเฉพาะตัวที่มองเห็นบนจอเท่านั้น
-        });
       }
+      animals.forEach((a, i) => {
+        if (a.visible) animAnimal(a, i);
+      });
       updateWalkers(dt);
       memoryBoxes.forEach(b => {
         // ตัวหีบและแท่นวางตั้งอยู่ติดพื้นดินอย่างมั่นคง ขยับหมุนเฉพาะผลึกดาวเรืองแสงด้านบน
@@ -13667,9 +15103,9 @@
     }
 
     /* ============================================================================
-     * src/scene/36-weather-state.js
+     * scene/36-weather-state.js
      * สถานะอากาศ WXR (ใช้ร่วมกับ ENV / LIFE / VEG)
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     const WXR = { rain: 0, fog: 0, cover: 0.15, storm: 0, kind: 'clear', auto: true };
@@ -13677,9 +15113,9 @@
     /* ===== ENV: เวลา · ท้องฟ้า · สภาพอากาศสุ่ม · ป่าไกล · นักปั่น ===== */
     const ENV = (() => {
       /* ============================================================================
-       * src/scene/37-env/01-time-weather-config.js
+       * scene/37-env/01-time-weather-config.js
        * ค่าตั้งต้นเวลา/อากาศ: keyframe สีท้องฟ้า (KF), ชนิดอากาศ (WK), ช่วงเวลา (PER), pick() สุ่มอากาศ
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       const C3 = THREE.Color,
@@ -13770,9 +15206,9 @@
       }
 
       /* ============================================================================
-       * src/scene/37-env/02-sky-dome-moon-stars.js
+       * scene/37-env/02-sky-dome-moon-stars.js
        * โดมท้องฟ้า (shader), ดวงจันทร์, ดาว และดาวตก
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       /* ท้องฟ้า */
@@ -14027,9 +15463,9 @@
       let rainbowA = 0;
 
       /* ============================================================================
-       * src/scene/37-env/03-clouds-lightning.js
+       * scene/37-env/03-clouds-lightning.js
        * เมฆ และฟ้าผ่า (strike)
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       /* เมฆ */
@@ -14090,9 +15526,9 @@
       }
 
       /* ============================================================================
-       * src/scene/37-env/04-weather-hud.js
+       * scene/37-env/04-weather-hud.js
        * แถบควบคุมเวลา/อากาศด้านบน (wxbar) และปุ่มต่าง ๆ
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       /* ปุ่มควบคุมเวลา/อากาศ — แถบด้านบน จัดเป็นกลุ่ม รองรับมือถือ */
@@ -14296,9 +15732,9 @@
       });
 
       /* ============================================================================
-       * src/scene/37-env/05-far-forest.js
+       * scene/37-env/05-far-forest.js
        * ป่าไกลและต้นไม้บนดอย
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       /* ป่าไกลและต้นไม้บนดอย */
@@ -14330,25 +15766,65 @@
           taken.push([x, z, 3.0]);
           T.push([x, 0, z, 0.9 + ER() * 0.9, ER() < 0.55]);
         }
+        const makeForestCanopy = pine => {
+          const positions = [],
+            branchGeo = new THREE.CylinderGeometry(0.035, 0.085, 1, 5),
+            leafGeo = new THREE.IcosahedronGeometry(1, 0),
+            up = new THREE.Vector3(0, 1, 0);
+          const append = (geometry, position, quaternion, scale) => {
+            const source = geometry.index ? geometry.toNonIndexed() : geometry,
+              vertex = new THREE.Vector3(),
+              attribute = source.attributes.position;
+            for (let i = 0; i < attribute.count; i++) {
+              vertex.set(attribute.getX(i) * scale.x, attribute.getY(i) * scale.y, attribute.getZ(i) * scale.z);
+              vertex.applyQuaternion(quaternion).add(position);
+              positions.push(vertex.x, vertex.y, vertex.z);
+            }
+            if (source !== geometry) source.dispose();
+          };
+          const tierCount = pine ? 6 : 3,
+            branchesPerTier = pine ? 6 : 5,
+            tierSpacing = pine ? 0.55 : 0.62,
+            firstY = pine ? 1.55 : 1.55;
+          for (let tier = 0; tier < tierCount; tier++) {
+            const progress = tier / Math.max(1, tierCount - 1),
+              reach = pine ? 1.38 - progress * 0.76 : 1.25 - progress * 0.48,
+              y = firstY + tier * tierSpacing;
+            for (let branchIndex = 0; branchIndex < branchesPerTier; branchIndex++) {
+              const angle = (branchIndex / branchesPerTier) * Math.PI * 2 + tier * (pine ? 0.3 : 0.44),
+                direction = new THREE.Vector3(Math.cos(angle), pine ? -0.12 + progress * 0.3 : 0.24, Math.sin(angle)).normalize(),
+                length = reach * (0.9 + ((branchIndex + tier) % 3) * 0.05),
+                start = new THREE.Vector3(0, y, 0),
+                end = start.clone().addScaledVector(direction, length),
+                branchMid = start.clone().lerp(end, 0.5),
+                branchRotation = new THREE.Quaternion().setFromUnitVectors(up, direction),
+                foliageRotation = new THREE.Quaternion().setFromAxisAngle(up, angle);
+              append(branchGeo, branchMid, branchRotation, new THREE.Vector3(0.72, length, 0.72));
+              append(
+                leafGeo,
+                end,
+                foliageRotation,
+                pine
+                  ? new THREE.Vector3(length * 0.54, 0.13, 0.24)
+                  : new THREE.Vector3(0.58, 0.23, 0.34)
+              );
+            }
+          }
+          if (pine) {
+            const tip = new THREE.ConeGeometry(0.12, 0.68, 6).translate(0, firstY + tierCount * tierSpacing, 0);
+            append(tip, new THREE.Vector3(), new THREE.Quaternion(), new THREE.Vector3(1, 1, 1));
+            tip.dispose();
+          }
+          branchGeo.dispose();
+          leafGeo.dispose();
+          const geometry = new THREE.BufferGeometry();
+          geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+          geometry.computeVertexNormals();
+          return geometry;
+        };
         const gT = new THREE.CylinderGeometry(0.14, 0.22, 2.2, 5).translate(0, 1.1, 0),
-          gB = new THREE.IcosahedronGeometry(1, 1).scale(2.3, 1.9, 2.3).translate(0, 3.3, 0),
-          gC = (() => {
-            const P = [],
-              N = [];
-            [
-              [1.6, 2.4, 2.3],
-              [1.2, 2.2, 3.75],
-              [0.8, 2, 5.2]
-            ].forEach(q => {
-              const c = new THREE.ConeGeometry(q[0], q[1], 7).translate(0, q[2], 0).toNonIndexed();
-              P.push(...c.attributes.position.array);
-              N.push(...c.attributes.normal.array);
-            });
-            const g = new THREE.BufferGeometry();
-            g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
-            g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
-            return g;
-          })(),
+          gB = makeForestCanopy(false),
+          gC = makeForestCanopy(true),
           gT2 = new THREE.CylinderGeometry(0.09, 0.2, 5.2, 6).translate(0, 2.6, 0),
           fm = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
         const br = T.filter(t => t[4]),
@@ -14402,9 +15878,9 @@
       }
 
       /* ============================================================================
-       * src/scene/37-env/06-cyclists.js
+       * scene/37-env/06-cyclists.js
        * นักปั่นจักรยานริมถนน (mkCyc, updCyc)
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       /* นักปั่นจักรยานริมถนน */
@@ -14604,9 +16080,9 @@
       }
 
       /* ============================================================================
-       * src/scene/37-env/07-update-loop.js
+       * scene/37-env/07-update-loop.js
        * ฟังก์ชันอัปเดต ENV ทุกเฟรม (ท้องฟ้า แสง สภาพอากาศ ฟ้าผ่า) — ถูก frame() เรียกใช้
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       /* ลูปหลัก */
@@ -14972,9 +16448,9 @@
     /* ===== LIFE: คนหลากหลาย · ทุ่งนากว้าง · หนองน้ำ · นก · หมอกใต้ยอดดอย ===== */
     const LIFE = (() => {
       /* ============================================================================
-       * src/scene/38-life/01-setup-mist.js
+       * scene/38-life/01-setup-mist.js
        * ตัวช่วยพื้นฐานของ LIFE และหมอกใต้ยอดดอย
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       const V3 = THREE.Vector3,
@@ -15024,9 +16500,9 @@
       }
 
       /* ============================================================================
-       * src/scene/38-life/02-human-model.js
+       * scene/38-life/02-human-model.js
        * โมเดลคนแบบละเอียด human()
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       /* คนละเอียด (แยกชั้น PolygonOffset ป้องกันกระพริบ Z-Fighting และตั้งค่าจุดเดินไร้รอยต่อ) */
@@ -15380,9 +16856,9 @@
       }
 
       /* ============================================================================
-       * src/scene/38-life/03-crowd-archetypes.js
+       * scene/38-life/03-crowd-archetypes.js
        * รูปแบบตัวละคร (ARCH), ฝูงคน (crowd) และการวางคนเดินตามทาง
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       const ARCH = [
@@ -15707,9 +17183,9 @@
       }
 
       /* ============================================================================
-       * src/scene/38-life/04-ponds.js
+       * scene/38-life/04-ponds.js
        * หนองน้ำ ใบบัว และกก
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       /* ลำดับสร้างโลก: หนองน้ำ → ทุ่งนา → ตาล/กระท่อม */
@@ -15813,9 +17289,9 @@
       }
 
       /* ============================================================================
-       * src/scene/38-life/05-rice-fields.js
+       * scene/38-life/05-rice-fields.js
        * ทุ่งนากว้าง
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       /* ทุ่งนา */
@@ -15864,9 +17340,9 @@
       }
 
       /* ============================================================================
-       * src/scene/38-life/06-palms-huts-farmers.js
+       * scene/38-life/06-palms-huts-farmers.js
        * ตาล กระท่อม หุ่นไล่กา และคนตามคันนา/ริมหนอง
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       /* ================= ล้างแผ่นนาตารางสุ่มที่ทับโซนเกษตรกรรมก่อนวางหุ่นไล่กาและชาวนา ================= */
@@ -16304,6 +17780,10 @@
         fenceWoodM = sm2(0x9c7a50),
         crateWoodM = sm2(0xc49558),
         sackClothM = sm2(0xe2d0a4);
+      for (const soilMaterial of [paddyBaseM, ridgeSoilM, darkSoilM]) {
+        soilMaterial.normalMap = earthNormalMap;
+        soilMaterial.normalScale = new THREE.Vector2(0.12, 0.12);
+      }
 
       const cornStalkM = mt(0x5b8c32),
         cornLeafM = new THREE.MeshStandardMaterial({
@@ -16325,6 +17805,7 @@
           { m: mt(0xd93848), r: 0.068, cluster: 3 }, // ลิ้นจี่จักรพรรดิ (ออกเป็นพวง)
           { m: mt(0xc9974c), r: 0.058, cluster: 4 }  // ลำไยสีทอง (ออกเป็นพวง)
         ];
+      orcLeafDark.flatShading = orcLeafMid.flatShading = orcLeafLight.flatShading = true;
 
       const cocoTrunkM = sm2(0x846c4c),
         cocoLeafM = new THREE.MeshStandardMaterial({
@@ -16413,18 +17894,21 @@
           [0, 1.95, 0, 0.95, orcLeafMid],
           [0.58, 1.75, 0.35, 0.72, orcLeafDark],
           [-0.38, 1.8, 0.56, 0.68, orcLeafMid],
-          [0.25, 2.38, 0.18, 0.62, orcLeafLight]
-        ]; // ลดพุ่มเหลือ 4 ก้อน
+            [0.25, 2.38, 0.18, 0.62, orcLeafLight],
+            [0.62, 1.52, -0.42, 0.58, orcLeafDark],
+            [-0.66, 1.55, -0.24, 0.55, orcLeafMid],
+            [0.02, 1.5, 0.68, 0.52, orcLeafLight]
+          ];
         blobs.forEach(([bx, by, bz, br, bm], bi) => {
           const m = new THREE.Mesh(leafGeo, bm);
           m.position.set(bx, by, bz);
-          m.scale.set(br * 1.08, br * 0.86, br * 1.08);
-          m.rotation.set(LR() * 2, LR() * 2, LR() * 2);
+          m.scale.set(br * 1.3, br * 0.48, br * 0.86);
+          m.rotation.set((LR() - 0.5) * 0.18, LR() * Math.PI * 2, (LR() - 0.5) * 0.12);
           m.castShadow = bi === 0;
           g.add(m);
           
           // ลดจำนวนลูกผลไม้ที่ต้องคำนวณ
-          for (let f = 0; f < 2; f++) {
+          for (let f = 0; bi < 4 && f < 2; f++) {
             const fa = LR() * 6.28, fe = -0.15 + LR() * 0.75;
             const fx = bx + Math.cos(fa) * Math.cos(fe) * br * 0.92;
             const fy = by + Math.sin(fe) * br * 0.72;
@@ -16522,7 +18006,7 @@
       }
 
       zoneIdx.push(crowd.length);
-      // ================= โซน 2: ไร่ข้าวโพดยกร่องสลับสวนฟักทองเป็นระยะ (t: 0.658 - 0.752) =================
+      // ================= โซน 2: แปลงฟักทองและไร่ข้าวโพดแยกเป็นคนละช่วง =================
       // วัสดุฟักทองแบบผิวเรียบนุ่ม (ไม่ใช้ flatShading) เพื่อให้พูฟักทองดูโค้งมนสมจริง
       const pumpkinOrangeM = new THREE.MeshLambertMaterial({ color: 0xe8701a }),
         pumpkinGoldM = new THREE.MeshLambertMaterial({ color: 0xe0a024 }),
@@ -16620,7 +18104,7 @@
             plot.rotation.y = Math.atan2(o.tn.x, o.tn.z);
             scene.add(plot);
 
-            const isPumpkinPatch = cornPlotCount % 3 === 0;
+            const isPumpkinPatch = t < 0.69;
             // ฐานดินและร่องแปลงลูกฟูกขนานเป็นระเบียบ
             box(7.2, 0.06, 7.8, darkSoilM, 0, 0.03, 0, plot);
             for (let rx = -2.7; rx <= 2.71; rx += 1.8) {
@@ -17536,6 +19020,228 @@
             side: THREE.DoubleSide
           });
 
+        {
+          const houseIndex = 7,
+            [houseX, houseZ] = at(houseIndex, -(P[houseIndex].w + 5.2)),
+            riversideHouse = new THREE.Group(),
+            woodA = sm2(0x86552f),
+            woodB = sm2(0xa06a3d),
+            woodC = sm2(0x70472c),
+            trimM = sm2(0xc3955c),
+            roofM = sm2(0x75452d),
+            roofLightM = sm2(0xa25d34),
+            windowM = new THREE.MeshBasicMaterial({ color: 0xffd989 }),
+            glassM = new THREE.MeshBasicMaterial({ color: 0x5b7467 }),
+            awningRedM = sm2(0xb84435),
+            awningCreamM = sm2(0xf0dfbb),
+            houseFront = 2.5;
+          riversideHouse.position.set(houseX, -0.04, houseZ);
+          riversideHouse.rotation.y = yawInward(houseIndex) + Math.PI;
+          wetlandRoot.add(riversideHouse);
+
+          // Elevated timber stilts, cross-bracing, and a wraparound plank deck.
+          for (const sx of [-2.35, 2.35]) {
+            for (const sz of [-2.05, 0.25, 2.55, 4.25]) {
+              cyl(0.13, 0.19, 2.0, woodC, sx, 0.48, sz, riversideHouse);
+              cyl(0.2, 0.21, 0.34, _wMossM, sx, 0.13, sz, riversideHouse);
+            }
+            rodTo(sx, 0.28, 0.3, sx * 0.76, 1.35, 1.25, 0.05, 0.065, trimM, riversideHouse);
+            rodTo(sx, 0.28, 2.55, sx * 0.76, 1.35, 1.55, 0.05, 0.065, trimM, riversideHouse);
+          }
+          box(5.2, 0.18, 7.1, woodC, 0, 1.45, 1.05, riversideHouse);
+          for (let z = -2.4; z <= 4.35; z += 0.3) {
+            box(5.55, 0.045, 0.27, Math.round(z * 10) % 2 ? woodA : woodB, 0, 1.57, z, riversideHouse);
+          }
+          box(5.05, 2.4, 4.7, woodA, 0, 2.78, 0.05, riversideHouse);
+          box(5.25, 0.14, 5.1, woodC, 0, 4.02, 0.05, riversideHouse);
+          box(5.05, 2.24, 4.7, woodB, 0, 5.19, 0.05, riversideHouse);
+
+          // Individually visible wall boards and corner posts give the timber walls depth.
+          for (const sx of [-2.48, 2.48]) {
+            for (let y = 1.78; y <= 3.78; y += 0.25) {
+              box(0.06, 0.035, 4.55, Math.round(y * 10) % 2 ? woodB : woodC, sx, y, 0.05, riversideHouse);
+            }
+            for (let y = 4.24; y <= 6.12; y += 0.25) {
+              box(0.06, 0.035, 4.55, Math.round(y * 10) % 2 ? woodB : woodC, sx, y, 0.05, riversideHouse);
+            }
+            for (const sz of [-2.27, 0.05, 2.37]) {
+              box(0.16, 2.3, 0.16, trimM, sx, 2.78, sz, riversideHouse);
+              box(0.16, 2.2, 0.16, trimM, sx, 5.18, sz, riversideHouse);
+            }
+          }
+          for (let x = -2.28; x <= 2.29; x += 0.26) {
+            const plankM = Math.round(x * 10) % 2 ? woodB : woodC;
+            if (Math.abs(x) > 0.7) {
+              box(0.23, 2.3, 0.07, plankM, x, 2.78, houseFront, riversideHouse);
+              box(0.23, 2.12, 0.07, plankM, x, 5.18, houseFront, riversideHouse);
+            }
+            box(0.23, 2.3, 0.07, plankM, x, 2.78, -2.3, riversideHouse);
+            box(0.23, 2.12, 0.07, plankM, x, 5.18, -2.3, riversideHouse);
+          }
+
+          // Gabled upper facade, hand-built roof boards, ridge beam, and exposed rafters.
+          const gableShape = new THREE.Shape();
+          gableShape.moveTo(-2.48, 0);
+          gableShape.lineTo(2.48, 0);
+          gableShape.lineTo(0, 2.8);
+          gableShape.closePath();
+          const gableGeo = new THREE.ShapeGeometry(gableShape),
+            gableMat = new THREE.MeshLambertMaterial({ color: 0x87542f, side: THREE.DoubleSide, flatShading: true });
+          for (const sz of [-2.34, 2.34]) {
+            const gable = new THREE.Mesh(gableGeo, gableMat);
+            gable.position.set(0, 6.28, sz);
+            if (sz < 0) gable.rotation.y = Math.PI;
+            riversideHouse.add(gable);
+          }
+          for (const sx of [-1, 1]) {
+            const roofSide = box(3.15, 0.18, 6.05, roofM, sx * 1.43, 8.55, 0.05, riversideHouse);
+            roofSide.rotation.z = sx * -0.48;
+            for (let z = -2.85; z <= 2.86; z += 0.43) {
+              const rib = box(3.05, 0.055, 0.055, roofLightM, sx * 1.43, 8.66, z, riversideHouse);
+              rib.rotation.z = sx * -0.48;
+            }
+            for (let x = 0.35; x <= 2.65; x += 0.38) {
+              const xPos = sx * x,
+                yPos = 9.25 - x * 0.49;
+              box(0.035, 0.035, 6.12, x > 2.2 ? trimM : roofLightM, xPos, yPos, 0.05, riversideHouse);
+            }
+            for (const z of [-2.95, 3.05]) {
+              rodTo(sx * 0.08, 9.28, z, sx * 2.95, 7.83, z, 0.075, 0.085, trimM, riversideHouse);
+            }
+          }
+          box(0.18, 0.19, 6.2, trimM, 0, 9.22, 0.05, riversideHouse);
+          for (const sz of [-2.0, 2.0]) {
+            const cross = box(0.07, 0.9, 0.08, trimM, 0, 9.23, sz, riversideHouse);
+            cross.rotation.z = Math.PI / 4;
+            const other = box(0.07, 0.9, 0.08, trimM, 0, 9.23, sz, riversideHouse);
+            other.rotation.z = -Math.PI / 4;
+          }
+
+          // Multi-pane windows, shutters, upper balcony and striped porch awnings.
+          const addWindow = (x, y, z, width) => {
+            box(width, 0.84, 0.075, trimM, x, y, z, riversideHouse);
+            box(width - 0.18, 0.66, 0.035, glassM, x, y, z + 0.05, riversideHouse);
+            for (const dx of [-width * 0.22, width * 0.22]) {
+              box(0.045, 0.66, 0.04, windowM, x + dx, y, z + 0.08, riversideHouse);
+            }
+            box(width - 0.12, 0.045, 0.04, windowM, x, y, z + 0.08, riversideHouse);
+            box(width + 0.18, 0.11, 0.18, trimM, x, y - 0.49, z + 0.08, riversideHouse);
+          };
+          addWindow(-1.38, 2.82, 2.58, 1.08);
+          addWindow(1.38, 2.82, 2.58, 1.08);
+          addWindow(-1.46, 5.08, 2.42, 1.02);
+          addWindow(1.46, 5.08, 2.42, 1.02);
+          box(0.94, 1.78, 0.12, woodC, 0, 2.8, 2.59, riversideHouse);
+          box(0.73, 1.56, 0.035, woodB, 0, 2.8, 2.67, riversideHouse);
+          cyl(0.045, 0.045, 0.08, trimM, 0.28, 2.78, 2.72, riversideHouse, Math.PI / 2, 0);
+          for (const sx of [-2.8, -1.4, 0, 1.4, 2.8]) {
+            box(0.1, 0.94, 0.1, woodC, sx, 2.08, 3.55, riversideHouse);
+          }
+          box(6.1, 0.09, 0.12, trimM, 0, 2.52, 3.55, riversideHouse);
+          box(6.1, 0.08, 0.12, trimM, 0, 1.93, 3.55, riversideHouse);
+          for (let x = -2.8; x <= 2.81; x += 0.4) {
+            box(0.045, 0.52, 0.045, _wBambooGoldM, x, 2.22, 3.55, riversideHouse);
+          }
+          box(5.7, 0.12, 1.72, woodC, 0, 4.08, 3.2, riversideHouse);
+          for (let x = -2.65; x <= 2.66; x += 0.3) {
+            box(0.27, 0.045, 1.65, Math.round(x * 10) % 2 ? woodA : woodB, x, 4.16, 3.2, riversideHouse);
+          }
+          for (const x of [-2.65, 2.65]) {
+            cyl(0.055, 0.065, 0.92, trimM, x, 4.58, 3.2, riversideHouse);
+          }
+          box(5.7, 0.09, 0.1, trimM, 0, 4.98, 3.2, riversideHouse);
+          box(5.7, 0.08, 0.1, trimM, 0, 4.42, 3.2, riversideHouse);
+          for (let x = -2.55; x <= 2.56; x += 0.42) {
+            box(0.045, 0.46, 0.045, _wBambooGoldM, x, 4.7, 3.2, riversideHouse);
+          }
+          for (const x of [-1.4, 0, 1.4]) {
+            for (const z of [3.0, 4.12]) cyl(0.055, 0.065, 0.95, trimM, x, 2.08, z, riversideHouse);
+          }
+          for (let x = -2.55; x <= 2.56; x += 0.42) {
+            box(0.4, 0.08, 1.45, Math.round(x * 10) % 2 ? awningRedM : awningCreamM, x, 6.0, 3.0, riversideHouse);
+          }
+          box(5.3, 0.08, 1.56, woodC, 0, 6.15, 3.0, riversideHouse);
+
+          // Carved approach stairs, lanterns, rain barrels, crates, clay jars, and mooring rope.
+          for (let k = 0; k < 7; k++) {
+            const z = 4.4 + k * 0.34,
+              y = 0.22 + k * 0.19;
+            box(1.55, 0.12, 0.38, k % 2 ? woodA : woodB, 0, y, z, riversideHouse);
+          }
+          for (const sx of [-2.0, 2.0]) {
+            const lantern = new THREE.Group();
+            lantern.position.set(sx, 3.35, 2.63);
+            box(0.28, 0.38, 0.22, woodC, 0, 0, 0, lantern);
+            const glow = box(0.16, 0.24, 0.035, windowM, 0, 0, 0.13, lantern);
+            glow.material = new THREE.MeshBasicMaterial({ color: 0xffd879, transparent: true, opacity: 0.72 });
+            riversideHouse.add(lantern);
+          }
+          for (const sx of [-2.8, 2.8]) {
+            cyl(0.28, 0.32, 0.65, _wTimberM, sx, 1.9, 2.0, riversideHouse);
+            for (let bandY of [1.65, 1.91, 2.15]) {
+              const band = new THREE.Mesh(new THREE.TorusGeometry(0.27, 0.018, 6, 14), trimM);
+              band.position.set(sx, bandY, 2.0);
+              band.rotation.x = Math.PI / 2;
+              riversideHouse.add(band);
+            }
+            box(0.62, 0.58, 0.62, woodB, sx, 1.86, 3.35, riversideHouse);
+            box(0.68, 0.08, 0.68, trimM, sx, 2.18, 3.35, riversideHouse);
+          }
+          cyl(0.08, 0.1, 1.0, woodC, 3.35, 0.55, 2.8, riversideHouse);
+          rodTo(3.35, 0.88, 2.8, 2.35, 0.55, 3.35, 0.018, 0.018, _wBambooGoldM, riversideHouse);
+          const waterline = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.56, 20).rotateX(-Math.PI / 2), _wWaveRingM);
+          waterline.position
+            .set(0, 0, 4.15)
+            .applyQuaternion(riversideHouse.quaternion)
+            .add(riversideHouse.position);
+          waterline.position.y = 0.068;
+          wetlandRoot.add(waterline);
+
+          const bananaLeafGeo = makeArchedBladeGeo(3.5, 0.58, 0.62, 1.18),
+            bananaLeafM = new THREE.MeshStandardMaterial({ color: 0x3f8e32, roughness: 0.78, side: THREE.DoubleSide }),
+            bananaLeafLightM = new THREE.MeshStandardMaterial({ color: 0x70b83d, roughness: 0.76, side: THREE.DoubleSide }),
+            bananaSheathM = sm2(0x789b3c);
+          [ [-4.3, -0.1], [4.1, 0.2], [-3.6, 4.2] ].forEach(([x, z], clumpIdx) => {
+            const banana = new THREE.Group();
+            banana.position.set(x, 0, z);
+            banana.scale.setScalar(0.82 + clumpIdx * 0.12);
+            wetlandRoot.add(banana);
+            for (let stem = 0; stem < 3; stem++) {
+              const sx = (stem - 1) * 0.5,
+                topY = 2.7 + (stem % 2) * 0.28;
+              cyl(0.27, 0.38, topY, stem % 2 ? bananaSheathM : bananaLeafLightM, sx, topY / 2, (stem - 1) * 0.22, banana);
+              for (let leafIdx = 0; leafIdx < 7; leafIdx++) {
+                const angle = (leafIdx / 7) * Math.PI * 2 + stem * 0.6,
+                  leaf = new THREE.Mesh(bananaLeafGeo, leafIdx % 3 ? bananaLeafM : bananaLeafLightM);
+                leaf.position.set(sx, topY - 0.12, (stem - 1) * 0.22);
+                leaf.rotation.y = angle;
+                leaf.rotation.x = -0.08 - (leafIdx % 3) * 0.12;
+                leaf.castShadow = true;
+                banana.add(leaf);
+                rodTo(
+                  sx,
+                  topY - 0.08,
+                  (stem - 1) * 0.22,
+                  sx + Math.sin(angle) * 0.16,
+                  topY + 0.24,
+                  (stem - 1) * 0.22 + Math.cos(angle) * 1.25,
+                  0.022,
+                  0.026,
+                  bananaSheathM,
+                  banana
+                );
+              }
+            }
+            for (let leaf = 0; leaf < 5; leaf++) {
+              const sprout = new THREE.Mesh(bananaLeafGeo, bananaLeafLightM);
+              sprout.position.set((WR() - 0.5) * 0.55, 2.85 + WR() * 0.2, 0);
+              sprout.rotation.y = (leaf / 5) * 6.28;
+              sprout.scale.setScalar(0.38);
+              banana.add(sprout);
+            }
+          });
+        }
+
         // ตัวช่วยสร้างโมเดลปลา 3 มิติแบบละเอียด (หัว + ตา + ลำตัว + ครีบหลัง + ครีบอก + หางแฉกตัว V ขยับได้)
         const makeDetailedFish = (scale = 1) => {
           const fg = new THREE.Group();
@@ -17854,6 +19560,144 @@
           cyl(0.032, 0.016, 0.055, podGreenM, 0, 0.075, 0, flw);
           return flw;
         };
+
+        const padVeinPositions = [];
+        for (let k = 0; k < 9; k++) {
+          const a = (k / 9) * Math.PI * 2,
+            endX = Math.cos(a) * 0.48,
+            endZ = Math.sin(a) * 0.48;
+          padVeinPositions.push(0, 0.012, 0, endX, 0.012, endZ);
+        }
+        const padVeinGeo = new THREE.BufferGeometry();
+        padVeinGeo.setAttribute('position', new THREE.Float32BufferAttribute(padVeinPositions, 3));
+        const padVeinMat = new THREE.LineBasicMaterial({ color: 0x9aca58, transparent: true, opacity: 0.62 });
+        const lilyLeaves = [];
+        [6, 16, 29, 39].forEach((pi, patchIdx) => {
+          const q = P[pi],
+            centerOffset = (patchIdx % 2 ? -1 : 1) * q.w * 0.32,
+            [px, pz] = at(pi, centerOffset),
+            patch = new THREE.Group();
+          patch.position.set(px, 0, pz);
+          patch.rotation.y = yawInward(pi);
+          wetlandRoot.add(patch);
+          for (let k = 0; k < 7; k++) {
+            const a = (k / 7) * Math.PI * 2 + patchIdx * 0.63 + WR() * 0.32,
+              r = k === 0 ? 0 : 0.75 + WR() * 1.85,
+              sc = 0.82 + WR() * 0.55,
+              leaf = new THREE.Group();
+            leaf.position.set(Math.cos(a) * r, 0.07 + WR() * 0.018, Math.sin(a) * r * 0.78);
+            leaf.rotation.y = WR() * Math.PI * 2;
+            leaf.scale.setScalar(sc);
+            lilyLeaves.push({ leaf, phase: patchIdx * 1.7 + k * 0.83 });
+            const pad = new THREE.Mesh(padNotchGeo, padColors[(k + patchIdx) % padColors.length]);
+            pad.rotation.y = WR() * 6.28;
+            leaf.add(pad);
+            const veins = new THREE.LineSegments(padVeinGeo, padVeinMat);
+            veins.position.y = 0.012;
+            leaf.add(veins);
+            patch.add(leaf);
+            if (k % 3 !== 1) {
+              const flower = makeLotusFlower3D((k + patchIdx) % 4 !== 0);
+              flower.position.set(0.08, 0.13, -0.06);
+              flower.scale.setScalar(0.85 + WR() * 0.3);
+              leaf.add(flower);
+            }
+          }
+        });
+
+        const crocBodyMat = mt(0x3c7c24),
+          crocDarkMat = mt(0x285a1d),
+          crocBellyMat = mt(0xb3a966),
+          crocEyeMat = mt(0xe4c847),
+          crocPupilMat = mt(0x10160c),
+          marshCrocodile = new THREE.Group(),
+          crocTail = new THREE.Group();
+        const crocIndex = 17,
+          [crocX, crocZ] = at(crocIndex, -0.9);
+        marshCrocodile.position.set(crocX, 0.04, crocZ);
+        marshCrocodile.rotation.y = Math.atan2(DX[crocIndex], DZ[crocIndex]) + 0.45;
+        wetlandRoot.add(marshCrocodile);
+        ball(1, crocBodyMat, 0, 0.08, 0, marshCrocodile, 0.53, 0.31, 1.55);
+        ball(1, crocBellyMat, 0, -0.12, 0.08, marshCrocodile, 0.47, 0.12, 1.18);
+        ball(1, crocBodyMat, 0, 0.14, 1.32, marshCrocodile, 0.38, 0.25, 0.62);
+        ball(1, crocBodyMat, 0, 0.08, 1.92, marshCrocodile, 0.31, 0.15, 0.72);
+        ball(1, crocBellyMat, 0, -0.015, 1.95, marshCrocodile, 0.29, 0.065, 0.72);
+        for (const sx of [-1, 1]) {
+          ball(0.07, crocDarkMat, sx * 0.19, 0.17, 2.43, marshCrocodile, 1, 0.45, 0.75);
+          ball(0.085, crocEyeMat, sx * 0.27, 0.26, 1.58, marshCrocodile, 1.05, 0.9, 0.9);
+          ball(0.044, crocPupilMat, sx * 0.29, 0.29, 1.62, marshCrocodile, 0.75, 0.9, 1);
+          ball(0.028, crocDarkMat, sx * 0.17, 0.19, 2.43, marshCrocodile, 1, 0.45, 1.2);
+          for (const z of [-0.74, 0.78]) {
+            const leg = new THREE.Group();
+            leg.position.set(sx * 0.37, -0.02, z);
+            marshCrocodile.add(leg);
+            ball(0.19, crocBodyMat, sx * 0.18, -0.015, 0, leg, 1.1, 0.65, 1.05);
+            for (let toe = -1; toe <= 1; toe++) {
+              const claw = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.18, 5), crocBellyMat);
+              claw.position.set(sx * (0.32 + Math.abs(toe) * 0.04), -0.04, toe * 0.12 + 0.08);
+              claw.rotation.z = Math.PI / 2;
+              leg.add(claw);
+            }
+          }
+        }
+        for (let k = 0; k < 11; k++) {
+          const z = 1.08 - k * 0.23,
+            ridge = new THREE.Mesh(new THREE.ConeGeometry(0.13 - k * 0.004, 0.24, 4), crocDarkMat);
+          ridge.position.set(0, 0.32 - Math.abs(k - 4) * 0.008, z);
+          ridge.rotation.x = Math.PI / 2;
+          marshCrocodile.add(ridge);
+        }
+        crocTail.position.set(0, 0.03, -1.32);
+        marshCrocodile.add(crocTail);
+        for (let k = 0; k < 7; k++) {
+          const z = -0.22 * k,
+            r = 0.34 * (1 - k / 8),
+            segment = new THREE.Mesh(new THREE.ConeGeometry(r, 0.42, 7), k % 2 ? crocBodyMat : crocDarkMat);
+          segment.position.set(0, 0.02, z);
+          segment.rotation.x = Math.PI / 2;
+          segment.scale.set(1, 1, 0.72);
+          crocTail.add(segment);
+        }
+        const crocRipple = new THREE.Mesh(
+          new THREE.RingGeometry(1.05, 1.35, 28).rotateX(-Math.PI / 2),
+          _wWaveRingM
+        );
+        crocRipple.position.set(crocX, 0.066, crocZ);
+        crocRipple.scale.set(1.1, 0.7, 1.8);
+        wetlandRoot.add(crocRipple);
+
+        const wadingBirds = [],
+          wadingBirdWhiteM = mt(0xf4f1df),
+          wadingBirdShadeM = mt(0xd7d8ca),
+          wadingBirdLegM = mt(0x443b2d),
+          wadingBirdBeakM = mt(0xd8a64d);
+        [13, 31, 37].forEach((pi, idx) => {
+          const side = idx % 2 ? -1 : 1,
+            [bx, bz] = at(pi, side * P[pi].w * 0.5),
+            bird = new THREE.Group(),
+            neck = new THREE.Group(),
+            wings = [];
+          bird.position.set(bx, 0.065, bz);
+          bird.rotation.y = Math.atan2(DX[pi], DZ[pi]) + (idx - 1) * 0.4;
+          wetlandRoot.add(bird);
+          ball(0.17, wadingBirdWhiteM, 0, 0.17, -0.02, bird, 0.9, 0.7, 1.35);
+          for (const sx of [-1, 1]) {
+            const wing = ball(0.12, wadingBirdShadeM, sx * 0.1, 0.2, -0.08, bird, 1.05, 0.42, 1.05);
+            wing.rotation.z = sx * -0.28;
+            wings.push(wing);
+            rodTo(sx * 0.075, 0.12, -0.04, sx * 0.08, -0.28, 0.01, 0.018, 0.022, wadingBirdLegM, bird);
+            rodTo(sx * 0.08, -0.28, 0.01, sx * 0.08, -0.34, 0.18, 0.014, 0.016, wadingBirdLegM, bird);
+          }
+          neck.position.set(0, 0.2, 0.12);
+          bird.add(neck);
+          rodTo(0, 0, 0, 0, 0.47, 0.08, 0.035, 0.045, wadingBirdWhiteM, neck);
+          ball(0.07, wadingBirdWhiteM, 0, 0.51, 0.12, neck, 0.85, 0.82, 1);
+          const beak = new THREE.Mesh(new THREE.ConeGeometry(0.035, 0.24, 6), wadingBirdBeakM);
+          beak.position.set(0, 0.49, 0.27);
+          beak.rotation.x = Math.PI / 2;
+          neck.add(beak);
+          wadingBirds.push({ bird, neck, wings, phase: idx * 2.4 });
+        });
 
         // ใบบัวหลัก 6 ใบที่กบน้อยกระโดดเวียนไปเกาะ + ใบบัวบริวารอีก 18 ใบ
         const frogPadCoords = [
@@ -18705,6 +20549,21 @@
               wb.userData.w2.scale.setScalar(1.0 + Math.cos(tt * 1.8 + ph) * 0.1);
             }
           });
+
+          lilyLeaves.forEach(({ leaf, phase }) => {
+            leaf.rotation.z = Math.sin(tt * 0.85 + phase) * 0.035;
+            leaf.position.y = 0.07 + Math.sin(tt * 1.1 + phase) * 0.012;
+          });
+          crocTail.rotation.y = Math.sin(tt * 0.72) * 0.16;
+          marshCrocodile.position.y = 0.04 + Math.sin(tt * 0.9) * 0.025;
+          crocRipple.scale.set(1.1 + Math.sin(tt * 1.2) * 0.12, 0.7, 1.8 + Math.cos(tt * 1.2) * 0.18);
+          wadingBirds.forEach(({ bird, neck, wings, phase }) => {
+            neck.rotation.x = Math.sin(tt * 0.8 + phase) * 0.12;
+            bird.position.y = 0.065 + Math.sin(tt * 1.35 + phase) * 0.018;
+            wings.forEach((wing, idx) => {
+              wing.rotation.z = (idx ? -1 : 1) * (0.28 + Math.sin(tt * 1.7 + phase) * 0.025);
+            });
+          });
         };
       }
 
@@ -18815,7 +20674,7 @@
             }
         };
 
-        // 0. รอบๆ วัดทั้ง 5 แห่ง: พระสงฆ์ + งานทำบุญหน้าวัด (พระนั่งรับสังฆทาน ญาติโยมพับเพียบพนมมือ พ่อค้าแม่ค้า ลูกค้า และคนเดินเที่ยวงานด้วยโมเดลคนสมจริง)
+        // 0. รอบๆ วัดทั้ง 2 แห่ง: พระสงฆ์ + งานทำบุญหน้าวัด (พระนั่งรับสังฆทาน ญาติโยมพับเพียบพนมมือ พ่อค้าแม่ค้า ลูกค้า และคนเดินเที่ยวงานด้วยโมเดลคนสมจริง)
         if (window.__TEMPLES) {
           const meritLady = (topCol, btCol, hs = 1, p = '') => ({
             sk: pk(SK),
@@ -19254,9 +21113,9 @@
       }
 
       /* ============================================================================
-       * src/scene/38-life/07-playground.js
+       * scene/38-life/07-playground.js
        * สนามเด็กเล่น 5 รูปแบบ และการวางตำแหน่งคนที่ไม่ได้เดิน
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       /* --- เริ่มโค้ด: สนามเด็กเล่น 5 รูปแบบ (Realistic Playgrounds with Dirt/Grass Grounds & Detailed Play Structures) --- */
@@ -19827,9 +21686,9 @@
         }
 
       /* ============================================================================
-       * src/scene/38-life/08-birds.js
+       * scene/38-life/08-birds.js
        * นกริมหนองน้ำและฝูงนกบิน
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       /* นก */
@@ -19905,9 +21764,9 @@
       const hp = new V3();
 
       /* ============================================================================
-       * src/scene/38-life/09-update-loop.js
+       * scene/38-life/09-update-loop.js
        * ฟังก์ชันอัปเดต LIFE ทุกเฟรม — ถูก frame() เรียกใช้
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       const _cWhite = new THREE.Color(1, 1, 1),
@@ -19959,7 +21818,7 @@
               continue;
             }
             const ds = h.ds || 350,
-              walkSp = baseWalkSp * (h.run ? 2.15 : h.v / 0.45);
+              walkSp = baseWalkSp * (h.run ? 2.3 : h.v / 0.45);
             h.dist += h.dir * walkSp * dt;
             if (h.dist > h.span) {
               h.dist = h.span;
@@ -20023,7 +21882,7 @@
             )
           )
             h.at = 0;
-          h.ph += dt * (h.run ? 5.1 : 1.15 + h.v * 1.35);
+          h.ph += dt * (h.run ? 5.4 : 1.15 + h.v * 1.35);
           const s = Math.sin(h.ph),
             c = Math.cos(h.ph),
             am = h.run ? 0.64 : h.skirt ? 0.24 : 0.32;
@@ -20234,9 +22093,9 @@
     })();
 
     /* ============================================================================
-     * src/scene/39-veg-hook.js
+     * scene/39-veg-hook.js
      * ตัวแปร vegUpdate (hook) ที่ frame() เรียก — ค่าจริงถูกกำหนดใน 40-veg/05
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     /* ===== VEG: หญ้า · ต้นข้าว · ดอกไม้ แบบละเอียด พลิ้วตามลม และรับแสงเงาตามสภาพอากาศ ===== */
@@ -20244,9 +22103,9 @@
 
     try {
       /* ============================================================================
-       * src/scene/40-veg/01-geometry-builders.js
+       * scene/40-veg/01-geometry-builders.js
        * วัสดุหญ้าพลิ้วตามลม และตัวสร้างเรขาคณิตใบหญ้า/ใบข้าว/รวง/ดอกไม้ (vBlade, vEar, vGrassGeo, vFlowerGeo)
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       const VEG = {
@@ -20516,9 +22375,9 @@
         vMF = vegMat(2.6, VMF, 0.7);
 
       /* ============================================================================
-       * src/scene/40-veg/02-grass-flower-types.js
+       * scene/40-veg/02-grass-flower-types.js
        * ชนิดหญ้า ข้าว และดอกไม้ที่ใช้ในฉาก (gLawn, gTall, gRiceG, FT ...)
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       const gLawn = vGrassGeo(vMkR(11), {
@@ -20658,9 +22517,9 @@
       };
 
       /* ============================================================================
-       * src/scene/40-veg/03-roadside-placement.js
+       * scene/40-veg/03-roadside-placement.js
        * การวางหญ้าและดอกไม้ริมทาง
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       const vA = [[], [], []],
@@ -20870,9 +22729,9 @@
       FT.forEach((g, i) => addChunkedVeg(g, vMF, vfi[i], false));
 
       /* ============================================================================
-       * src/scene/40-veg/04-rice-fields.js
+       * scene/40-veg/04-rice-fields.js
        * ต้นข้าวในทุ่งนาใกล้ถนน และนาแปลงเล็กริมทาง (น้ำขัง คันนา กอข้าว)
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       /* ทุ่งนาใกล้ถนน: ต้นข้าวเป็นแถว (เฉพาะแปลงที่อยู่ในระยะสายตา) */
@@ -20891,6 +22750,7 @@
           .filter(o => o.d < 42 * 42)
           .sort((a, b) => a.d - b.d)
           .slice(0, 48);
+        MAP_RICE_FIELDS.push(...vcells.map(({ q }) => q));
         for (const { q } of vcells) {
           const kind = GR.has(q.c) ? 'g' : GO.has(q.c) ? 'r' : q.c === 0x9c8456 ? 's' : 'w',
             sp = { g: 1.5, r: 1.5, s: 1.3, w: 2 }[kind],
@@ -20967,9 +22827,9 @@
       }
 
       /* ============================================================================
-       * src/scene/40-veg/05-cloud-shadow-fx.js
+       * scene/40-veg/05-cloud-shadow-fx.js
        * เงาเมฆบนพื้น ฟิลเตอร์แสงตามอากาศ และ vegUpdate()
-       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+       * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
       /* เงาเมฆที่เคลื่อนผ่านพื้น + ฟิลเตอร์แสงตามอากาศ + แสงสะท้อนเย็นในเงา */
@@ -21111,9 +22971,9 @@
     }
 
     /* ============================================================================
-     * src/scene/41-start.js
+     * scene/41-start.js
      * ตั้งกล้องเริ่มต้นและเริ่มลูปแอนิเมชัน
-     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+     * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
     // --- ระบบจำกัดระยะการมองเห็น (Real-life Distance Culling แบบแยกหน้า-หลัง) ---
@@ -21213,16 +23073,15 @@
     camera.position.set(18, 15, 20);
     requestAnimationFrame(frame);
   }
-
   /* ============================================================================
-   * src/app/99-boot.js
+   * app/99-boot.js
    * จุดเริ่มต้นแอป: เรียก init3D() แล้ววาดหน้าจอครั้งแรก
-   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู build.config.mjs)
+   * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
    * ========================================================================== */
 
 
   /* ============================================================================
-   * src/app/98-relax-addons.js
+   * app/98-relax-addons.js
    * จุดแวะพักชมวิว (rest stop) และตั้งเวลาหลับ (sleep timer)
    * ========================================================================== */
   {
@@ -21347,7 +23206,7 @@
   }
 
   /* ============================================================================
-   * src/app/97-mixer-presets-memory.js
+   * app/97-mixer-presets-memory.js
    * มิกเซอร์เสียง · พรีเซ็ตบรรยากาศ · โหมดซ่อน UI · เสียงตามสถานที่ · เมื่อปีก่อน · โปสการ์ด · สรุปอารมณ์รายเดือน
    * ========================================================================== */
   {
@@ -21370,12 +23229,13 @@
       const t = audioCtx ? audioCtx.currentTime : 0;
       if (windGainN) windGainN.gain.setTargetAtTime(0.16 * MIXV.wind, t, 0.2);
       if (streamGainN) streamGainN.gain.setTargetAtTime(0.045 * MIXV.water * boost, t, 0.2);
+      if (riverAmbienceGainN && audioCtx) riverAmbienceGainN.gain.setTargetAtTime(0.018 * MIXV.water * riverAmbienceProximity, t, 0.35);
       if (birdBus) birdBus.gain.setTargetAtTime(MIXV.birds, t, 0.2);
       if (mBus && mOn) mBus.gain.setTargetAtTime(0.88 * MIXV.music, mCtx.currentTime, 0.2);
     };
     addModal('mixModal', 'เสียงและบรรยากาศ',
       '<p>เลือกพรีเซ็ตเพื่อปรับเวลา อากาศ อารมณ์ และเสียงในครั้งเดียว</p><div class="chips" id="presetChips"></div><div id="mixRows"></div>' +
-      '<label class="mix-row"><span>เสียงตามสถานที่ (เรือหางยาว · ระฆัง · กบเขียด)</span><input type="checkbox" class="switch" id="placeSnd" checked></label>');
+      '<label class="mix-row"><span>เสียงตามสถานที่ (เรือหางยาว · น้ำกระทบตลิ่ง · ระฆัง · กบเขียด)</span><input type="checkbox" class="switch" id="placeSnd" checked></label>');
     const rows = $('mixRows');
     CH.forEach(([k, l]) => {
       const r = mk('label', 'mix-row', '<span>' + l + '</span><input type="range" min="0" max="1.5" step="0.05" aria-label="' + l + '">');
@@ -21384,7 +23244,7 @@
       r.dataset.k = k; rows.appendChild(r);
     });
     const syncRows = () => rows.querySelectorAll('.mix-row').forEach(r => (r.querySelector('input').value = MIXV[r.dataset.k]));
-    $('placeSnd').onchange = e => { placeOn = e.target.checked; boost = 1; mixApply(); };
+    $('placeSnd').onchange = e => { placeOn = e.target.checked; boost = 1; if (!placeOn) riverAmbienceProximity = 0; mixApply(); };
 
     /* ---------- พรีเซ็ต ---------- */
     const PRE = [
@@ -21419,23 +23279,79 @@
     const env = (n, dur, pk, pan) => {
       const g = audioCtx.createGain(), p = audioCtx.createStereoPanner ? audioCtx.createStereoPanner() : null;
       g.gain.setValueAtTime(0.0001, n); g.gain.linearRampToValueAtTime(pk, n + 0.03); g.gain.exponentialRampToValueAtTime(0.0001, n + dur);
-      if (p) { p.pan.value = pan; g.connect(p); p.connect(birdBus); } else g.connect(birdBus);
+      if (p) { p.pan.value = pan; g.connect(p); p.connect(placeBus || birdBus); } else g.connect(placeBus || birdBus);
       return g;
     };
-    const boat = (n, vol = 1) => { const pan = Math.random() * 1.2 - 0.6, f = audioCtx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 260;
-      for (let i = 0; i < 8; i++) { const o = audioCtx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 78 + Math.random() * 6; o.connect(f); f.connect(env(n + i * 0.26, 0.22, 0.016 * vol, pan)); o.start(n + i * 0.26); o.stop(n + i * 0.26 + 0.24); } };
+    const boat = (n, vol = 1) => {
+      const engine = audioCtx.createOscillator(),
+        harmonic = audioCtx.createOscillator(),
+        flutter = audioCtx.createOscillator(),
+        flutterGain = audioCtx.createGain(),
+        harmonicGain = audioCtx.createGain(),
+        engineFilter = audioCtx.createBiquadFilter(),
+        engineGain = audioCtx.createGain(),
+        pan = audioCtx.createStereoPanner ? audioCtx.createStereoPanner() : null,
+        direction = Math.random() < 0.5 ? -1 : 1,
+        destination = placeBus || birdBus;
+      engine.type = 'sawtooth';
+      engine.frequency.setValueAtTime(52, n);
+      engine.frequency.exponentialRampToValueAtTime(68, n + 1.7);
+      engine.frequency.exponentialRampToValueAtTime(63, n + 3.1);
+      engine.frequency.exponentialRampToValueAtTime(50, n + 5.2);
+      harmonic.type = 'triangle';
+      harmonic.frequency.setValueAtTime(104, n);
+      harmonic.frequency.exponentialRampToValueAtTime(136, n + 1.7);
+      harmonic.frequency.exponentialRampToValueAtTime(126, n + 3.1);
+      harmonic.frequency.exponentialRampToValueAtTime(100, n + 5.2);
+      engineFilter.type = 'lowpass';
+      engineFilter.frequency.setValueAtTime(240, n);
+      engineFilter.frequency.linearRampToValueAtTime(410, n + 1.7);
+      engineFilter.frequency.linearRampToValueAtTime(310, n + 3.1);
+      engineFilter.frequency.linearRampToValueAtTime(220, n + 5.2);
+      engineFilter.Q.value = 0.6;
+      harmonicGain.gain.value = 0.2;
+      engineGain.gain.setValueAtTime(0.0001, n);
+      engineGain.gain.linearRampToValueAtTime(0.035 * vol, n + 1.1);
+      engineGain.gain.setValueAtTime(0.028 * vol, n + 2.8);
+      engineGain.gain.exponentialRampToValueAtTime(0.0001, n + 5.4);
+      flutter.type = 'sine';
+      flutter.frequency.value = 16;
+      flutterGain.gain.value = 0.003 * vol;
+      flutter.connect(flutterGain).connect(engineGain.gain);
+      engine.connect(engineFilter);
+      harmonic.connect(harmonicGain).connect(engineFilter);
+      engineFilter.connect(engineGain);
+      if (pan) {
+        pan.pan.setValueAtTime(direction * 0.75, n);
+        pan.pan.linearRampToValueAtTime(direction * -0.75, n + 5.4);
+        engineGain.connect(pan).connect(destination);
+      } else engineGain.connect(destination);
+      engine.start(n);
+      harmonic.start(n);
+      flutter.start(n);
+      engine.stop(n + 5.5);
+      harmonic.stop(n + 5.5);
+      flutter.stop(n + 5.5);
+    };
     const frog = n => { const pan = Math.random() * 1.6 - 0.8, f0 = 480 + Math.random() * 160;
       for (let i = 0; i < 4; i++) { const o = audioCtx.createOscillator(), f = audioCtx.createBiquadFilter(); o.type = 'square'; f.type = 'lowpass'; f.frequency.value = 900; o.frequency.value = f0; o.connect(f); f.connect(env(n + i * 0.12, 0.07, 0.018, pan)); o.start(n + i * 0.12); o.stop(n + i * 0.12 + 0.08); } };
     const bell = n => { const g = env(n, 3.5, 0.03, Math.random() - 0.5); [1, 2.76, 5.4].forEach((m, i) => { const o = audioCtx.createOscillator(), h = audioCtx.createGain(); o.frequency.value = 220 * m; h.gain.value = 1 / (i + 1); o.connect(h); h.connect(g); o.start(n); o.stop(n + 3.6); }); };
     setInterval(() => {
-      if (!placeOn || !soundOn || !audioCtx || !birdBus || document.hidden) return;
+      if (!soundOn || !audioCtx || !birdBus) return;
       const km = kmAt(state.routeT);
       const nearTown = ROUTE.some(r => (r.id === 'chiangsaen' || r.id === 'chiangkhong') && Math.abs(km - r.km) < 7);
-      const nearRiver = (typeof RIVER !== 'undefined' && RIVER.nearBoat && RIVER.nearBoat() < 130) || (state.routeT >= 0.71 && state.routeT <= 0.81);
-      const near = nearTown || nearRiver;
-      const nb = near ? 1.8 : 1; if (nb !== boost) { boost = nb; mixApply(); }
+      const boatDistance = typeof RIVER !== 'undefined' && RIVER.nearBoat ? RIVER.nearBoat() : Infinity;
+      const routeNearRiver = state.routeT >= 0.71 && state.routeT <= 0.81;
+      const boatNear = boatDistance < 170;
+      const nearRiver = boatNear || routeNearRiver;
+      riverAmbienceProximity = placeOn && nearRiver
+        ? (boatNear ? Math.max(0.25, 1 - boatDistance / 190) : 0.35)
+        : 0;
+      const nb = nearRiver ? 1.8 : 1; if (nb !== boost) { boost = nb; mixApply(); }
       const n = audioCtx.currentTime, rain = window.RODENV ? RODENV.rain() : 0;
-      if (near && Math.random() < 0.3) boat(n, nearRiver && typeof RIVER !== 'undefined' && RIVER.nearBoat ? Math.max(0.15, Math.min(1, 1 - RIVER.nearBoat() / 130)) : 0.3);
+      if (riverAmbienceGainN) riverAmbienceGainN.gain.setTargetAtTime(0.018 * MIXV.water * riverAmbienceProximity, n, 1.2);
+      if (!placeOn || document.hidden) return;
+      if (boatNear && Math.random() < 0.3) boat(n, Math.max(0.15, Math.min(1, 1 - boatDistance / 190)));
       else if (state.night && rain < 0.4 && Math.random() < 0.7) frog(n);
       else if (!state.night && nearTown && Math.random() < 0.12) bell(n);
     }, 4000);
@@ -21451,22 +23367,44 @@
       '<canvas id="pcCanvas" width="1200" height="800" style="width:100%;border-radius:14px;background:#dfe8dc"></canvas><input class="field" id="pcText" maxlength="90" placeholder="ข้อความบนโปสการ์ด" style="margin-top:12px;width:100%">' +
       '<div class="modal-actions"><button class="secondary" type="button" id="pcMake">สร้างใหม่</button><button class="secondary" type="button" id="pcSave" style="border-color:#376951;color:#376951">บันทึกเป็นรูป</button></div>');
     const wrap = (x, t, maxW) => { const out = []; let l = ''; for (const ch of t) { if (x.measureText(l + ch).width > maxW && l) { out.push(l); l = ch; } else l += ch; } if (l) out.push(l); return out.slice(0, 2); };
-    const makeCard = () => {
+    let postcardDate = localDate();
+    const makeCard = (entry = null) => {
       const url = window.RODENV && RODENV.shot(); if (!url) return toast('ฉาก 3D ยังไม่พร้อม');
       const im = new Image(); im.onload = () => {
         const c = $('pcCanvas'), W = c.width, H = c.height, x = c.getContext('2d'), s = Math.max(W / im.width, H / im.height);
         x.drawImage(im, (W - im.width * s) / 2, (H - im.height * s) / 2, im.width * s, im.height * s);
         const g = x.createLinearGradient(0, H * 0.45, 0, H); g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(10,25,18,.8)'); x.fillStyle = g; x.fillRect(0, 0, W, H);
+        x.fillStyle = '#ffffffd9'; x.font = '500 22px "Noto Sans Thai",sans-serif';
+        x.fillText('A MEMORY ALONG THE WAY', 60, 64);
         x.fillStyle = '#fff'; x.font = '600 56px "Noto Sans Thai",sans-serif';
-        wrap(x, $('pcText').value || 'ขับช้า ๆ ไปตามเส้นทางความทรงจำ', W - 120).forEach((l, i) => x.fillText(l, 60, H - 190 + i * 72));
+        wrap(x, $('pcText').value || 'ขับช้า ๆ ไปตามเส้นทางความทรงจำ', W - 120).forEach((l, i) => x.fillText(l, 60, H - 250 + i * 66));
+        let placeLabel = $('placeLabel').textContent;
+        if (entry) {
+          const stop = routeStops.reduce((a, b) =>
+            Math.abs(a.t - entry.routeT) < Math.abs(b.t - entry.routeT) ? a : b
+          );
+          placeLabel = (entry.place || stop.name) + ' · ' + prettyDate(entry.date);
+          x.font = '400 25px "Noto Sans Thai",sans-serif'; x.fillStyle = '#ffffffd9';
+          wrap(x, entry.text, W - 120).forEach((line, i) => x.fillText(line, 60, H - 101 - (1 - i) * 34));
+        } else {
+          placeLabel += ' · ' + prettyDate(localDate());
+        }
         x.font = '400 28px "Noto Sans Thai",sans-serif'; x.fillStyle = '#ffffffd9';
-        x.fillText($('placeLabel').textContent + ' · ' + prettyDate(localDate()), 60, H - 60);
+        x.fillText(placeLabel, 60, H - 35);
         x.textAlign = 'right'; x.fillText('Road of Days', W - 60, H - 60); x.textAlign = 'left';
       }; im.src = url;
     };
     $('pcMake').onclick = makeCard;
-    $('pcSave').onclick = () => $('pcCanvas').toBlob(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'road-of-days-' + localDate() + '.png'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); });
-    addFab('โปสการ์ด', 'i-star', () => { const e = state.entries[0]; $('pcText').value = e ? e.title : ''; openModal('pcModal'); setTimeout(makeCard, 120); }, 'fabGrpMem');
+    $('pcSave').onclick = () => $('pcCanvas').toBlob(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'road-of-days-' + postcardDate + '.png'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); });
+    document.addEventListener('road-days:postcard', event => {
+      const entry = state.entries.find(item => item.id === event.detail?.entry?.id);
+      if (!entry) return toast('ไม่พบบันทึกนี้แล้ว');
+      postcardDate = entry.date;
+      $('pcText').value = entry.title;
+      openModal('pcModal');
+      requestAnimationFrame(() => makeCard(entry));
+    });
+    addFab('โปสการ์ด', 'i-star', () => { const e = state.entries[0]; postcardDate = localDate(); $('pcText').value = e ? e.title : ''; openModal('pcModal'); setTimeout(makeCard, 120); }, 'fabGrpMem');
 
     /* ---------- สรุปอารมณ์รายเดือน ---------- */
     const moodSum = () => {
@@ -21480,7 +23418,7 @@
   }
 
   /* ============================================================================
-   * src/app/99-boot.js
+   * app/99-cloud-boot.js
    * ดึงข้อมูลตำแหน่งจากคลาวด์ก่อนวาด 3D
    * ========================================================================== */
   
@@ -21499,6 +23437,8 @@
         const cloudEntryIds = new Set(cloudState.entries.map(entry => entry.id));
         const hasPendingChanges = localStateAccountId === bootAccountId &&
           (localStorage.getItem(CLOUD_PENDING_KEY + bootAccountId) === '1' ||
+            localStorage.getItem(PLACES_PENDING_KEY + bootAccountId) === '1' ||
+            state.placesUpdatedAt > cloudState.placesUpdatedAt ||
             state.entries.some(entry => !cloudEntryIds.has(entry.id)));
         if (hasPendingChanges) {
           localStorage.setItem(CLOUD_PENDING_KEY + bootAccountId, '1');

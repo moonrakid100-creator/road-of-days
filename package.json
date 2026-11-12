@@ -4,7 +4,9 @@
   "description": "Road of Days · เส้นทางความทรงจำเชียงราย (3D Driving & Daily Memory Journal)",
   "private": true,
   "scripts": {
-    "prepare-www": "node -e \"const fs=require('fs');fs.mkdirSync('www',{recursive:true});['index.html','Road_of_Days_Chiangrai_v4.css','Road_of_Days_Chiangrai_v4.js','Road_of_Days_Models.js','Road_of_Days_UX.js','manifest.json','sw.js','icon-192.png','icon-512.png'].forEach(f=>fs.copyFileSync(f,'www/'+f));\"",
+    "build:app": "node scripts/build-app.js",
+    "check:app": "node scripts/build-app.js --check",
+    "prepare-www": "npm run build:app && node -e \"const fs=require('fs');fs.mkdirSync('www',{recursive:true});['index.html','Road_of_Days_Chiangrai_v4.css','Road_of_Days_Chiangrai_v4.js','Road_of_Days_Models.js','Road_of_Days_UX.js','manifest.json','sw.js','icon-192.png','icon-512.png'].forEach(f=>fs.copyFileSync(f,'www/'+f));\"",
     "cap:init": "npm run prepare-www && npx cap add android",
     "cap:sync": "npm run prepare-www && npx cap sync android"
   },

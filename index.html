@@ -6,7 +6,7 @@
 <link rel="manifest" href="manifest.json"><link rel="icon" type="image/png" href="icon-192.png"><link rel="apple-touch-icon" href="icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
-<link rel="stylesheet" href="Road_of_Days_Chiangrai_v4.css?v=7.8">
+<link rel="stylesheet" href="Road_of_Days_Chiangrai_v4.css?v=7.13">
 </head>
 <body>
 <svg style="display:none" aria-hidden="true"><defs>
@@ -72,7 +72,7 @@
 <div class="bottom-cards"><div class="card stat-card"><div class="stat-icon"><svg><use href="#i-cal"/></svg></div><div><strong><span id="memoryCount" style="font:inherit;color:inherit">0</span> <span>เรื่องราว</span></strong><span>ถูกเก็บไว้ในปฏิทิน</span></div></div><div class="card stat-card"><div class="stat-icon" style="background:#f7e8d4;color:#a97b3e"><svg><use href="#i-pin"/></svg></div><div><strong>6 <span>จุดแวะ</span></strong><span>รวม 200 กม. ในเส้นทางจำลอง</span></div></div></div>
 </div>
 <aside class="side">
-<form class="card" id="journalForm"><div class="flex justify-between items-center"><h2>บันทึกความทรงจำ</h2><button type="button" class="secondary sheet-close" id="sheetClose" aria-label="ปิดหน้าต่างเขียนบันทึก">ปิด</button><svg class="sheet-box" style="color:#9ba98f"><use href="#i-book"/></svg></div><p class="sub" style="margin:3px 0 5px">บันทึกเรื่องราวของวันนี้ เพื่อเก็บไว้ในปฏิทินส่วนตัว</p><div class="tiny" id="formMood" style="margin-bottom:6px"></div><div class="moods" id="moodOptions"></div><label class="form-label" for="entryDate">วันที่เดินทาง</label><input class="field" id="entryDate" type="date" required><label class="form-label" for="entryTitle">ตั้งชื่อให้วันนี้</label><input class="field" id="entryTitle" maxlength="90" placeholder="เช่น เส้นทางแม่จันสู่ดอยหลวง" required><label class="form-label" for="entryPlace">สถานที่ / จุดแวะพัก <span class="tiny">(ไม่จำเป็น)</span></label><input class="field" id="entryPlace" maxlength="100" placeholder="แม่จัน · ดอยหลวง · ริมโขง"><label class="form-label" for="entryText">อยากเก็บเรื่องอะไรไว้?</label><textarea class="field" id="entryText" maxlength="3000" placeholder="วันนี้ฉันได้พบ… สิ่งที่รู้สึกขอบคุณ…" required></textarea><div class="form-bottom"><span>เก็บไว้ในเบราว์เซอร์นี้เท่านั้น</span><span id="charCount">0 / 3,000</span></div><button class="primary" type="submit" id="saveBtn"><svg style="width:15px;height:15px"><use href="#i-save"/></svg><span>วางกล่องความทรงจำ</span></button><button type="button" id="cancelEdit" class="secondary" style="margin-top:10px;width:100%;display:none">ยกเลิกการแก้ไข</button></form>
+<form class="card" id="journalForm"><div class="flex justify-between items-center"><h2>บันทึกความทรงจำ</h2><button type="button" class="secondary sheet-close" id="sheetClose" aria-label="ปิดหน้าต่างเขียนบันทึก">ปิด</button><svg class="sheet-box" style="color:#9ba98f"><use href="#i-book"/></svg></div><p class="sub" style="margin:3px 0 5px">บันทึกเรื่องราวของวันนี้ เพื่อเก็บไว้ในปฏิทินส่วนตัว</p><div class="tiny" id="formMood" style="margin-bottom:6px"></div><div class="moods" id="moodOptions"></div><label class="form-label" for="entryDate">วันที่เดินทาง</label><input class="field" id="entryDate" type="date" required><label class="form-label" for="entryTitle">ตั้งชื่อให้วันนี้</label><input class="field" id="entryTitle" maxlength="90" placeholder="เช่น เส้นทางแม่จันสู่ดอยหลวง" required><label class="form-label" for="entryPlace">สถานที่ / จุดแวะพัก <span class="tiny">(ไม่จำเป็น)</span></label><input class="field" id="entryPlace" list="savedPlaceOptions" maxlength="100" placeholder="แม่จัน · ดอยหลวง · ริมโขง"><datalist id="savedPlaceOptions"></datalist><label class="form-label" for="entryText">อยากเก็บเรื่องอะไรไว้?</label><textarea class="field" id="entryText" maxlength="3000" placeholder="วันนี้ฉันได้พบ… สิ่งที่รู้สึกขอบคุณ…" required></textarea><div class="form-bottom"><span>เก็บไว้ในเบราว์เซอร์นี้เท่านั้น</span><span id="charCount">0 / 3,000</span></div><button class="primary" type="submit" id="saveBtn"><svg style="width:15px;height:15px"><use href="#i-save"/></svg><span>วางกล่องความทรงจำ</span></button><button type="button" id="cancelEdit" class="secondary" style="margin-top:10px;width:100%;display:none">ยกเลิกการแก้ไข</button></form>
 <div class="card lantern-card"><div class="eyebrow en" style="font-size:8px;color:#a18c70;margin-bottom:8px">LET IT GO, LET IT GLOW</div><h2>วางเรื่องหนักใจไว้บนฟ้า</h2><p>บางเรื่อง… ไม่ต้องแบกไว้ตลอดทาง เขียนมันลงไป แล้วปล่อยให้ลอยไปกับโคม</p><button id="openLantern">ปล่อยโคมลอย <svg aria-hidden="true" style="width:14px;height:14px"><use href="#i-arrow"/></svg></button></div>
 </aside>
 </div>
@@ -116,7 +116,7 @@
     </div>
     <div class="mem-card card-day">
       <div class="day-panel-head">
-        <div><span class="calendar-eyebrow">YOUR MOMENT</span><h2><svg aria-hidden="true"><use href="#i-book"/></svg> เรื่องราวของวัน</h2></div>
+        <div><span class="calendar-eyebrow">YOUR MOMENT</span><h2><svg aria-hidden="true"><use href="#i-book"/></svg> เรื่องราวของวัน</h2><p class="day-panel-subtitle">หน้าบันทึกเล็ก ๆ ระหว่างทาง</p></div>
         <span class="day-entry-count" id="dayCount"></span>
       </div>
       <div id="dayEntries" class="day-entries"></div>
@@ -146,12 +146,22 @@
 <div class="settings-row"><span>กู้คืนข้อมูลสำรอง</span><button class="secondary" id="importBtn">นำเข้า JSON</button><input id="importFile" type="file" accept=".json,application/json" hidden></div>
 </div><p class="set-note">ไฟล์สำรองมีเนื้อหาบันทึกส่วนตัว โปรดเก็บไว้ในที่ปลอดภัย</p></section>
 
+<section class="set-sec" aria-labelledby="placesHeading"><h3 class="set-h" id="placesHeading">สถานที่ / จุดแวะพักของฉัน</h3><div class="set-box place-manager">
+<p class="place-manager-note">จัดการรายการสถานที่สำหรับเลือกใช้ในบันทึก ระบบจะซิงก์กับฐานข้อมูลของบัญชีนี้เมื่อออนไลน์</p>
+<form id="savedPlaceForm" class="saved-place-form">
+<label class="form-label" for="savedPlaceName">ชื่อสถานที่</label><input class="field" id="savedPlaceName" maxlength="80" placeholder="เช่น จุดชมวิวริมโขง" required>
+<label class="form-label" for="savedPlaceNote">รายละเอียด <span class="tiny">(ไม่จำเป็น)</span></label><input class="field" id="savedPlaceNote" maxlength="160" placeholder="เช่น แวะพักชมวิวช่วงเย็น">
+<div class="place-form-actions"><button class="primary" id="savedPlaceSubmit" type="submit">เพิ่มสถานที่</button><button class="secondary" id="savedPlaceCancel" type="button" hidden>ยกเลิก</button></div>
+</form>
+<div class="saved-place-list" id="savedPlaceList" aria-live="polite"></div>
+</div><p class="set-note">รายการนี้เป็นสถานที่ส่วนตัวสำหรับบันทึก จุดแวะหลักในฉากเส้นทางจำลองยังคงเดิม</p></section>
+
 <!-- หมวด: ข้อมูลระบบ / พื้นที่อันตราย -->
 <section class="set-sec set-danger" aria-labelledby="setH3"><h3 class="set-h" id="setH3">ล้างข้อมูล</h3>
 <button class="secondary" id="clearBtn" style="color:#ac7064;width:100%">ล้างข้อมูลทั้งหมดในเครื่องนี้</button>
 <p class="set-note">แอปโหลด Three.js, Tailwind และฟอนต์จากผู้ให้บริการภายนอก จึงต้องใช้อินเทอร์เน็ต</p></section>
 </section></div>
-<div class="overlay" id="readerModal" hidden><section class="modal" role="dialog" aria-modal="true" aria-labelledby="rdTitle"><div id="readerNature" aria-hidden="true" style="height:120px;border-radius:16px;background:linear-gradient(#c1e4d9,#8bb684);margin-bottom:12px"></div><div id="rdBar" style="height:5px;border-radius:5px;margin-bottom:16px;background:#aec1a2"></div><div class="modal-head"><span class="tiny" id="rdMeta"></span><button class="iconbtn" data-close="readerModal" aria-label="ปิด" type="button"><svg><use href="#i-close"/></svg></button></div><h2 id="rdTitle" style="overflow-wrap:anywhere"></h2><div class="tiny" id="rdPlace" style="margin-top:6px"></div><p id="rdText" style="white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink);font-size:14px;line-height:2;margin:16px 0"></p><div class="reader-actions"><button class="secondary" id="rdFav" type="button" aria-pressed="false">ที่ชอบ</button><button class="secondary" id="rdEdit" type="button">แก้ไข</button><button class="secondary" id="rdDel" type="button" style="color:#ac7064">ลบ</button></div></section></div>
+<div class="overlay" id="readerModal" hidden><section class="modal" role="dialog" aria-modal="true" aria-labelledby="rdTitle"><div id="readerNature" aria-hidden="true" style="height:120px;border-radius:16px;background:linear-gradient(#c1e4d9,#8bb684);margin-bottom:12px"></div><div id="rdBar" style="height:5px;border-radius:5px;margin-bottom:16px;background:#aec1a2"></div><div class="modal-head"><span class="tiny" id="rdMeta"></span><button class="iconbtn" data-close="readerModal" aria-label="ปิด" type="button"><svg><use href="#i-close"/></svg></button></div><h2 id="rdTitle" style="overflow-wrap:anywhere"></h2><div class="tiny" id="rdPlace" style="margin-top:6px"></div><p id="rdText" style="white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink);font-size:14px;line-height:2;margin:16px 0"></p><div class="reader-actions"><button class="secondary" id="rdFav" type="button" aria-pressed="false">ที่ชอบ</button><button class="secondary" id="rdVisit" type="button">กลับไปดูจุดนี้</button><button class="secondary" id="rdPostcard" type="button">ทำโปสการ์ด</button><button class="secondary" id="rdEdit" type="button">แก้ไข</button><button class="secondary" id="rdDel" type="button" style="color:#ac7064">ลบ</button></div></section></div>
 <div class="overlay" id="confirmModal" hidden><section class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmHeading"><div class="modal-head"><h2 id="confirmHeading">ยืนยันการดำเนินการ</h2></div><p id="confirmText"></p><div class="modal-actions"><button class="secondary" data-close="confirmModal">ยกเลิก</button><button class="primary" id="confirmYes">ยืนยัน</button></div></section></div>
 
 <div class="fab" id="fab">
@@ -236,7 +246,7 @@
 (function() {
   var isCap = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   var GH_BASE = 'https://moonrakid100-creator.github.io/road-of-days/';
-  var VER = 'v=10.5';
+  var VER = 'v=10.50';
   var files = ['Road_of_Days_Models.js', 'Road_of_Days_Chiangrai_v4.js', 'Road_of_Days_UX.js'];
 
   if (isCap) {
