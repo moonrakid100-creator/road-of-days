@@ -1,4 +1,4 @@
-const CACHE_NAME = 'road-of-days-v10.24';
+const CACHE_NAME = 'road-of-days-v10.42';
 const ASSETS = [
   './',
   './index.html',

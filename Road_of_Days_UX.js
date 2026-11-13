@@ -193,8 +193,14 @@
     return '<path d="' + d + ' L640 240Z" fill="' + fill + '"/>';
   };
   const tree = (x, y, s, c) =>
-    '<g transform="translate(' + x + ' ' + y + ') scale(' + s + ')"><rect x="-2" y="-8" width="4" height="10" fill="#6b4e37"/>' +
-    '<polygon points="0,-44 -13,-14 13,-14" fill="' + c + '"/><polygon points="0,-34 -16,-4 16,-4" fill="' + c + '" opacity=".92"/></g>';
+    '<g transform="translate(' + x + ' ' + y + ') scale(' + s + ')">' +
+    '<polygon points="-2,-12 2,-12 3,1 -3,1" fill="#6b4e37"/>' +
+    '<polygon points="0,-52 -15,-27 15,-27" fill="' + c + '"/>' +
+    '<polygon points="0,-40 -21,-13 21,-13" fill="' + c + '"/>' +
+    '<polygon points="0,-52 -15,-27 -3,-30" fill="#fff" opacity=".2"/>' +
+    '<polygon points="0,-52 -3,-30 15,-27" fill="#203d2c" opacity=".16"/>' +
+    '<polygon points="0,-40 -21,-13 -4,-18" fill="#fff" opacity=".16"/>' +
+    '<polygon points="0,-40 -4,-18 21,-13" fill="#203d2c" opacity=".14"/></g>';
   const palm = (x, y, s, c) =>
     '<g transform="translate(' + x + ' ' + y + ') scale(' + s + ')"><rect x="-2.5" y="-60" width="5" height="62" fill="#8a7352"/>' +
     '<ellipse cx="-14" cy="-60" rx="16" ry="5" fill="' + c + '" transform="rotate(-20 -14 -60)"/>' +

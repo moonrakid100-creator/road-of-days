@@ -86,7 +86,7 @@
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.05;
-    renderer.shadowMap.type = THREE.PCFShadowMap; // เปลี่ยนเป็นเงาแบบปกติ เบาเครื่องกว่ามาก
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.domElement.setAttribute(
       'aria-label',
       'ฉากรถ EV สีครีมวิ่งบนถนนโค้งท่ามกลางต้นไม้ ภูเขา นก และสัตว์เล็กตามเส้นทางเชียงราย'
@@ -113,6 +113,7 @@
     Object.assign(sunLight.shadow.camera, { left: -22, right: 22, top: 22, bottom: -22, near: 2, far: 80 });
     sunLight.shadow.bias = -0.0006;
     sunLight.shadow.normalBias = 0.035;
+    sunLight.shadow.radius = coarsePointer ? 1.5 : 2;
     scene.add(sunLight);
     // ปิดการวาดแผ่นเงาใบไม้จำลอง 80x80m ทับซ้อนกับเงาต้นไม้จริง เพื่อลดภาระ Alpha-Test Shadow Pass ทุกเฟรม
     const canopyTex = { offset: { x: 0, y: 0 } };
@@ -666,7 +667,7 @@
       routePts.push(q.x, q.z);
     }
     const taken = [];
-    function spotOK(x, z, r, ignoreTempleReservations = false) {
+    function spotOK(x, z, r, ignoreTempleReservations = false, ignoreRiceFieldReservations = false) {
       const lim = (ROAD_HALF + r) ** 2;
       for (let i = 0; i < routePts.length; i += 2) {
         const dx = routePts[i] - x,
@@ -675,6 +676,7 @@
       }
       for (const o of taken) {
         if (ignoreTempleReservations && o[3] === 'temple') continue;
+        if (ignoreRiceFieldReservations && o[3] === 'rice-field') continue;
         const dx = o[0] - x,
           dz = o[1] - z,
           rr = o[2] + r;
@@ -699,9 +701,15 @@
 
     /* แม่น้ำสายกว้างไหลเลียบหลังสวนผลไม้ (ฝั่งนอกโค้งถนน t ≈ 0.712–0.802)
      * จองพื้นที่ไว้ตั้งแต่ต้น เพื่อให้ภูเขา ต้นไม้ แปลงเกษตร และเสาสัญญาณไม่ถูกวางทับลงในแม่น้ำ */
-    const RIVER_T0 = 0.710,
+    const BRIDGE_T = 0.735,
+      RIVER_T0 = 0.710,
       RIVER_T1 = 0.806,
-      RIVER_PTS = [];
+      RIVER_PTS = [],
+      CORN_FIELD_T0 = 0.74,
+      CORN_FIELD_T1 = 0.82,
+      CORN_FIELD_DEPTH = 28,
+      CORN_FIELD_ROAD_MARGIN = 0.8,
+      CORN_ROW_SPACING = 2;
     {
       const coreA = 0.732,
         coreB = 0.785;
@@ -713,14 +721,151 @@
         return -(22.5 + 45 * s * s); // ขยับเข้าใกล้ถนนเหลือ ~22.5 ม. (ริมตลิ่งห่างไหล่ทางเพียง ~7–10 ม.) ให้ชมวิวแม่น้ำและเรือแล่นข้างทางได้ชัดเจนจากในรถ
       };
       for (let t = RIVER_T0; t <= RIVER_T1 + 1e-9; t += 0.0008) {
-        const o = offRoad(t, prof(t)),
+        const riverOffset = prof(t),
+          o = offRoad(t, riverOffset),
           w = 11.8 + Math.sin(t * 410) * 1.2 + Math.sin(t * 157 + 1.3) * 0.6; // ครึ่งความกว้าง ~10.5–13.6 ม. (กว้างรวม ~21–27 ม.)
-        RIVER_PTS.push({ x: o.x, z: o.z, w, px: o.p.x, pz: o.p.z });
+        RIVER_PTS.push({ t, offset: riverOffset, x: o.x, z: o.z, w, px: o.p.x, pz: o.p.z });
+      }
+      {
+        const bridgeP = route.getPoint(BRIDGE_T);
+        const bridgeTangent = route.getTangent(BRIDGE_T);
+        const normalX = bridgeTangent.z,
+          normalZ = -bridgeTangent.x;
+        let nearRiverPoint = RIVER_PTS[0];
+        for (const point of RIVER_PTS) {
+          if (Math.abs(point.t - BRIDGE_T) < Math.abs(nearRiverPoint.t - BRIDGE_T)) nearRiverPoint = point;
+        }
+        const riverCenterX =
+            (nearRiverPoint.x - bridgeP.x) * normalX + (nearRiverPoint.z - bridgeP.z) * normalZ,
+          xStart = riverCenterX - nearRiverPoint.w + 4.5,
+          xEnd = -18,
+          rowCount = 64,
+          patchHalf = 64,
+          patchMinX = bridgeP.x - patchHalf,
+          patchMaxX = bridgeP.x + patchHalf,
+          patchMinY = -bridgeP.z - patchHalf,
+          patchMaxY = -bridgeP.z + patchHalf,
+          yaw = Math.atan2(bridgeTangent.x, bridgeTangent.z),
+          groundShape = new THREE.Shape(),
+          channelHole = new THREE.Path();
+        const centerZAt = progress => Math.sin(progress * 6.2 + 0.8) * 0.55;
+        const bankScaleAt = progress =>
+          Math.max(0.02, Math.min(1, 0.025 + progress * 5, 0.025 + (1 - progress) * 5));
+        const toGroundShape = (localX, localZ) => [
+          bridgeP.x + Math.cos(yaw) * localX + Math.sin(yaw) * localZ,
+          -(bridgeP.z - Math.sin(yaw) * localX + Math.cos(yaw) * localZ)
+        ];
+        groundShape.moveTo(patchMinX, patchMinY);
+        groundShape.lineTo(patchMaxX, patchMinY);
+        groundShape.lineTo(patchMaxX, patchMaxY);
+        groundShape.lineTo(patchMinX, patchMaxY);
+        for (let step = 0; step <= rowCount; step++) {
+          const row = xStart < xEnd ? step : rowCount - step;
+          const progress = row / rowCount,
+            localX = xStart + (xEnd - xStart) * progress,
+            bankScale = bankScaleAt(progress),
+            world = toGroundShape(localX, centerZAt(progress) + 7 * bankScale);
+          if (step === 0) channelHole.moveTo(world[0], world[1]);
+          else channelHole.lineTo(world[0], world[1]);
+        }
+        for (let step = 0; step <= rowCount; step++) {
+          const row = xStart < xEnd ? rowCount - step : step;
+          const progress = row / rowCount,
+            localX = xStart + (xEnd - xStart) * progress,
+            bankScale = bankScaleAt(progress),
+            world = toGroundShape(localX, centerZAt(progress) - 7 * bankScale);
+          channelHole.lineTo(world[0], world[1]);
+        }
+        channelHole.closePath();
+        groundShape.holes.push(channelHole);
+        const groundGeometry = new THREE.ShapeGeometry(groundShape);
+        const groundPositions = groundGeometry.attributes.position,
+          groundUvs = groundGeometry.attributes.uv;
+        for (let i = 0; i < groundPositions.count; i++) {
+          groundUvs.setXY(
+            i,
+            (groundPositions.getX(i) + 1200) / 2400,
+            (groundPositions.getY(i) + 1200) / 2400
+          );
+        }
+        groundGeometry.computeBoundingSphere();
+        ground.geometry.dispose();
+        ground.geometry = new THREE.BufferGeometry();
+        const addGroundTile = (left, right, bottom, top) => {
+          if (right <= left || top <= bottom) return;
+          const geometry = new THREE.PlaneGeometry(right - left, top - bottom);
+          geometry.translate((left + right) * 0.5, (bottom + top) * 0.5, 0);
+          const positions = geometry.attributes.position,
+            uvs = geometry.attributes.uv;
+          for (let i = 0; i < positions.count; i++) {
+            uvs.setXY(
+              i,
+              (positions.getX(i) + 1200) / 2400,
+              (positions.getY(i) + 1200) / 2400
+            );
+          }
+          const tile = new THREE.Mesh(geometry, groundMat);
+          tile.receiveShadow = true;
+          ground.add(tile);
+        };
+        addGroundTile(-1200, 1200, -1200, patchMinY);
+        addGroundTile(-1200, 1200, patchMaxY, 1200);
+        addGroundTile(-1200, patchMinX, patchMinY, patchMaxY);
+        addGroundTile(patchMaxX, 1200, patchMinY, patchMaxY);
+        const groundPatch = new THREE.Mesh(groundGeometry, groundMat);
+        groundPatch.receiveShadow = true;
+        ground.add(groundPatch);
       }
       for (let i = 0; i < RIVER_PTS.length; i += 2) {
         const q = RIVER_PTS[i];
         taken.push([q.x, q.z, q.w + 3]);
       }
+      for (let t = CORN_FIELD_T0; t <= CORN_FIELD_T1; t += 0.002) {
+        const p = route.getPoint(t),
+          tangent = route.getTangent(t),
+          nx = -tangent.z,
+          nz = tangent.x,
+          centerOffset = ROAD_HALF + CORN_FIELD_ROAD_MARGIN + CORN_FIELD_DEPTH * 0.5;
+        taken.push([
+          p.x + nx * centerOffset,
+          p.z + nz * centerOffset,
+          CORN_FIELD_DEPTH * 0.45 + 1,
+          'corn-field'
+        ]);
+      }
+    }
+    function cornFieldDepth() {
+      return CORN_FIELD_DEPTH;
+    }
+    function cornFieldPoint(t, distanceFromRoad = 0) {
+      const p = route.getPoint(t),
+        tangent = route.getTangent(t),
+        nx = -tangent.z,
+        nz = tangent.x,
+        offset = ROAD_HALF + CORN_FIELD_ROAD_MARGIN + distanceFromRoad;
+      return {
+        x: p.x + nx * offset,
+        z: p.z + nz * offset,
+        nx,
+        nz,
+        tangent
+      };
+    }
+    function cornFieldRowStart(row) {
+      const firstProgress = 0.04,
+        lastProgress = 0.96,
+        requiredDepth = CORN_ROW_SPACING * (row + 0.5) + 0.4,
+        tAt = progress => CORN_FIELD_T0 + (CORN_FIELD_T1 - CORN_FIELD_T0) * progress;
+      if (cornFieldDepth(tAt(lastProgress)) < requiredDepth) return null;
+      if (cornFieldDepth(tAt(firstProgress)) >= requiredDepth) return firstProgress;
+      let low = firstProgress,
+        high = lastProgress;
+      for (let i = 0; i < 16; i++) {
+        const mid = (low + high) * 0.5;
+        if (cornFieldDepth(tAt(mid)) >= requiredDepth) high = mid;
+        else low = mid;
+      }
+      return high;
     }
 
     /* หนองน้ำใหญ่โซนสวนมะพร้าว (ฝั่งในโค้งถนน t ≈ 0.860–0.910)
@@ -745,6 +890,62 @@
         taken.push([q.x, q.z, q.w + 2.8]);
       }
     }
+    const RICE_FIELD_LANE_COUNT = 5,
+      RICE_FIELD_LANE_SPACING = 15,
+      RICE_FIELD_MARGIN = 6,
+      RICE_FIELD_ROAD_SIDE_OFFSET = ROAD_HALF + 1.8,
+      RICE_FIELD_DEPTH = RICE_FIELD_LANE_COUNT * RICE_FIELD_LANE_SPACING,
+      RICE_FIELD_LANE_COLORS = [0x8ca34e, 0xcab64b, 0x987c49, 0x789345, 0x849b4a],
+      RICE_FIELD_STATION_STEP = 5,
+      RICE_FIELD_ACCESS_T = 0.885,
+      RICE_FIELD_ACCESS_RADIUS = 18,
+      RICE_FIELD_ACCESS_DEPTH = 20,
+      RICE_FIELD_ACCESS_POINT = route.getPoint(RICE_FIELD_ACCESS_T),
+      RICE_FIELD_RESERVATIONS = [],
+      RICE_FIELD_SIDES = [
+        { side: 1, inner: [], outer: [], outline: [] },
+        { side: -1, inner: [], outer: [], outline: [] }
+      ];
+    function riceFieldInnerOffset(riceSide, q) {
+      const base = riceSide.side > 0 ? q.w + RICE_FIELD_MARGIN : RICE_FIELD_ROAD_SIDE_OFFSET;
+      if (riceSide.side !== -1) return base;
+      const distance = Math.hypot(q.px - RICE_FIELD_ACCESS_POINT.x, q.pz - RICE_FIELD_ACCESS_POINT.z),
+        open = Math.max(0, 1 - distance / RICE_FIELD_ACCESS_RADIUS),
+        eased = open * open * (3 - 2 * open);
+      return base + (RICE_FIELD_ACCESS_DEPTH - base) * eased;
+    }
+    for (let i = 0; i < WETLAND_PTS.length; i++) {
+      const q = WETLAND_PTS[i],
+        nx = q.x - q.px,
+        nz = q.z - q.pz,
+        normalLength = Math.hypot(nx, nz) || 1,
+        ux = nx / normalLength,
+        uz = nz / normalLength;
+      for (const riceSide of RICE_FIELD_SIDES) {
+        const sideUx = ux * riceSide.side,
+          sideUz = uz * riceSide.side,
+          innerOffset = riceFieldInnerOffset(riceSide, q),
+          baseX = riceSide.side > 0 ? q.x : q.px,
+          baseZ = riceSide.side > 0 ? q.z : q.pz,
+          inner = { x: baseX + sideUx * innerOffset, z: baseZ + sideUz * innerOffset },
+          outer = {
+            x: inner.x + sideUx * RICE_FIELD_DEPTH,
+            z: inner.z + sideUz * RICE_FIELD_DEPTH
+          };
+        riceSide.inner.push(inner);
+        riceSide.outer.push(outer);
+        if (i < 3 || i >= WETLAND_PTS.length - 3 || (i - 3) % RICE_FIELD_STATION_STEP !== 0) continue;
+        for (let lane = 0; lane < RICE_FIELD_LANE_COUNT; lane++) {
+          const offset = innerOffset + (lane + 0.5) * RICE_FIELD_LANE_SPACING,
+            x = baseX + sideUx * offset,
+            z = baseZ + sideUz * offset;
+          RICE_FIELD_RESERVATIONS.push({ x, z, r: 11 });
+          taken.push([x, z, 11, 'rice-field']);
+        }
+      }
+    }
+    for (const riceSide of RICE_FIELD_SIDES)
+      riceSide.outline.push(...riceSide.inner, ...riceSide.outer.slice().reverse());
     const placedTempleSites = [];
     for (const site of templeSiteCenters) {
       let selected = null;
@@ -1182,6 +1383,7 @@
 
     // ประกาศตัวแปรใบไม้และฐานต้นไม้กลับมาให้ครบ (แก้อาการ leafGeo is not defined)
     const leafGeo = new THREE.IcosahedronGeometry(1, 0),
+      treeLeafGeo = new THREE.IcosahedronGeometry(1, 0),
       shadowCanvas = document.createElement('canvas'),
       shadowContext = shadowCanvas.getContext('2d');
     shadowCanvas.width = shadowCanvas.height = 128;
@@ -1200,10 +1402,20 @@
         depthWrite: false
       }),
       discGeo = new THREE.CircleGeometry(1, 20),
-      _pineBranchGeo = new THREE.CylinderGeometry(0.035, 0.075, 1, 5),
-      _pineFoliageGeo = new THREE.IcosahedronGeometry(1, 0),
-      _pineTipGeo = new THREE.ConeGeometry(0.13, 0.72, 6),
-      _pineMats = [0x386b48, 0x4b8053, 0x63925c].map(color => sm2(color));
+      PINE_TIER_COUNT = 6,
+      PINE_TIER_SPACING = 0.48,
+      PINE_TIER_HEIGHT = 1.35,
+      _pineTierGeos = Array.from({ length: PINE_TIER_COUNT }, (_, tier) => {
+        const progress = tier / (PINE_TIER_COUNT - 1);
+        return new THREE.ConeGeometry(
+          1.42 * Math.pow(1 - progress, 0.9) + 0.28,
+          PINE_TIER_HEIGHT - progress * 0.22,
+          7,
+          1,
+          true
+        );
+      }),
+      _pineMats = [0x386b48, 0x4b8053, 0x63925c].map(color => new THREE.MeshLambertMaterial({ color, flatShading: true }));
     const TREE_BATCH_SIZE = 36,
       treeBatches = new Map();
 
@@ -1214,6 +1426,7 @@
       g.scale.set(scale, scale * (0.9 + rt() * 0.35), scale);
       g.rotation.y = rand() * 6;
       const broad = species === 'broadleaf' || (species !== 'pine' && rand() > 0.52),
+        windAngle = rand() * Math.PI * 2,
         d = new THREE.Mesh(discGeo, discM);
       d.rotation.x = -Math.PI / 2;
       d.position.y = 0.02;
@@ -1229,9 +1442,10 @@
         ];
         levels.forEach((level, li) => {
           for (let b = 0; b < 4; b++) {
-            const angle = (b / 4) * Math.PI * 2 + li * 0.47 + rt() * 0.14,
-              dir = new THREE.Vector3(Math.cos(angle), 0.2 + rt() * 0.12, Math.sin(angle)).normalize(),
-              length = level.length * (0.88 + rt() * 0.24),
+            const angle = (b / 4) * Math.PI * 2 + li * 0.52 + windAngle * 0.12,
+              lean = 0.12 + rt() * 0.12,
+              dir = new THREE.Vector3(Math.cos(angle) + Math.cos(windAngle) * lean, 0.2 + rt() * 0.12, Math.sin(angle) + Math.sin(windAngle) * lean).normalize(),
+              length = level.length * (0.9 + rt() * 0.18),
               start = new THREE.Vector3(0, level.y, 0),
               end = start.clone().addScaledVector(dir, length),
               branch = new THREE.Mesh(broadBranchGeo, bark);
@@ -1241,13 +1455,18 @@
             branch.castShadow = li === 0;
             g.add(branch);
 
-            const foliage = new THREE.Mesh(leafGeo, rt() > 0.5 ? treeMat2 : treeMat);
+            const foliage = new THREE.Mesh(treeLeafGeo, rt() > 0.5 ? treeMat2 : treeMat);
             foliage.position.copy(end);
-            foliage.position.y += (rt() - 0.5) * 0.14;
-            foliage.scale.set(0.7 + rt() * 0.12, 0.2 + rt() * 0.04, 0.27 + rt() * 0.06);
-            foliage.rotation.y = angle + (rt() - 0.5) * 0.45;
-            foliage.rotation.z = -dir.y * 0.55;
-            foliage.castShadow = li === 0;
+            foliage.position.x += (rt() - 0.5) * 0.18;
+            foliage.position.y += (rt() - 0.5) * 0.2;
+            foliage.position.z += (rt() - 0.5) * 0.18;
+            const leafSize = 0.72 + rt() * 0.26;
+            if (rt() < 0.32) {
+              foliage.scale.set(leafSize * (0.86 + rt() * 0.2), leafSize * (0.7 + rt() * 0.16), leafSize * (0.78 + rt() * 0.16));
+            } else {
+              foliage.scale.set(leafSize, 0.32 + rt() * 0.14, 0.42 + rt() * 0.18);
+            }
+            foliage.rotation.set((rt() - 0.5) * 0.42, angle + (rt() - 0.5) * 0.65, -dir.y * 0.55 + (rt() - 0.5) * 0.3);
             g.add(foliage);
           }
         });
@@ -1262,43 +1481,20 @@
           }
         }
       } else {
-        const tiers = 6 + Math.floor(rt() * 3),
-          tierSpacing = 0.48,
-          topY = 1.55 + (tiers - 1) * tierSpacing + 0.82;
+        const topY =
+          1.55 +
+          (PINE_TIER_COUNT - 1) * PINE_TIER_SPACING +
+          (PINE_TIER_HEIGHT - 0.22) / 2 -
+          0.34;
         cyl(0.045, 0.14, topY, trunkMat, 0, topY / 2, 0, g);
         cyl(0.14, 0.2, 0.5, barkD, 0, 0.25, 0, g);
-        for (let j = 0; j < tiers; j++) {
-          const progress = j / Math.max(1, tiers - 1),
-            branchLength = 1.42 - progress * 0.72;
-          for (let b = 0; b < 6; b++) {
-            const angle = (b / 6) * Math.PI * 2 + j * 0.29 + (rt() - 0.5) * 0.12,
-              lift = (progress > 0.72 ? 0.24 : -0.16) + (rt() - 0.5) * 0.1,
-              dir = new THREE.Vector3(Math.cos(angle), lift, Math.sin(angle)).normalize(),
-              length = branchLength * (0.9 + rt() * 0.2),
-              rootX = Math.cos(angle) * 0.08,
-              rootZ = Math.sin(angle) * 0.08,
-              base = new THREE.Vector3(rootX, 1.55 + j * tierSpacing, rootZ),
-              end = base.clone().addScaledVector(dir, length),
-              mid = base.clone().lerp(end, 0.53),
-              branch = new THREE.Mesh(_pineBranchGeo, bark);
-            branch.position.copy(mid);
-            branch.scale.set(0.72, length, 0.72);
-            branch.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-            branch.castShadow = j < 2;
-            g.add(branch);
-
-            const foliage = new THREE.Mesh(_pineFoliageGeo, _pineMats[(j + b) % _pineMats.length]);
-            foliage.position.copy(end).addScaledVector(dir, 0.04);
-            foliage.scale.set(length * 0.53, 0.16 + rt() * 0.04, 0.28 + rt() * 0.06);
-            foliage.rotation.y = angle;
-            foliage.rotation.z = -dir.y * 0.45;
-            foliage.castShadow = j < 2;
-            g.add(foliage);
-          }
-        }
-        const tip = new THREE.Mesh(_pineTipGeo, _pineMats[1]);
-        tip.position.y = topY;
-        g.add(tip);
+        _pineTierGeos.forEach((geometry, tier) => {
+          const foliage = new THREE.Mesh(geometry, _pineMats[tier % _pineMats.length]);
+          foliage.position.y = 1.55 + tier * PINE_TIER_SPACING;
+          foliage.rotation.y = tier % 2 ? 0.18 : -0.08;
+          foliage.castShadow = tier < 2;
+          g.add(foliage);
+        });
       }
 
       const tileX = Math.floor(x / TREE_BATCH_SIZE) * TREE_BATCH_SIZE + TREE_BATCH_SIZE / 2;
@@ -1343,7 +1539,7 @@
     }
 
     // 0.4 สะพานชนบทคอนกรีตพร้อมคานข้าง ราวกันตก และหมุดสะท้อนแสง
-    const bridgeT = 0.735;
+    const bridgeT = BRIDGE_T;
     {
       const bridgeP = route.getPoint(bridgeT);
       const bridgeTn = route.getTangent(bridgeT);
@@ -1409,7 +1605,7 @@
 
       for (let i = -4; i <= 4; i++) {
         const x = i * 1.12;
-        const canopy = new THREE.Mesh(leafGeo, Math.abs(i) % 2 ? treeMat2 : treeMat);
+        const canopy = new THREE.Mesh(treeLeafGeo, Math.abs(i) % 2 ? treeMat2 : treeMat);
         canopy.position.set(x, 5.25 - Math.abs(i) * 0.11, (i % 2) * 0.18);
         canopy.scale.set(0.92, 0.48, 0.68);
         canopy.rotation.y = i * 0.31 + tt * 17;
@@ -1619,7 +1815,7 @@
 
     /* ============================================================================
      * scene/12-hills-fields.js
-     * เนินเขา (HILLS) และการสุ่มตำแหน่งแปลงนา/ดอกไม้ (FLSP, FIELDS, PADS)
+     * เนินเขา (HILLS) และการสุ่มตำแหน่งสิ่งปลูกสร้าง/ดอกไม้ (FLSP, FIELDS)
      * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
      * ========================================================================== */
 
@@ -1650,6 +1846,12 @@
         const dx = q.x - x,
           dz = q.z - z,
           rr = r + q.w + 8;
+        if (dx * dx + dz * dz < rr * rr) return false;
+      }
+      for (const q of RICE_FIELD_RESERVATIONS) {
+        const dx = q.x - x,
+          dz = q.z - z,
+          rr = r + q.r;
         if (dx * dx + dz * dz < rr * rr) return false;
       }
       return true;
@@ -1788,9 +1990,7 @@
     }
     const FLSP = [],
       FIELDS = [],
-      PADS = [],
-      VILLAGE_HOUSES = [],
-      MAP_RICE_FIELDS = [];
+      VILLAGE_HOUSES = [];
     for (let i = 0; i < 110; i++) {
       let t = rand(),
         p = route.getPoint(t),
@@ -6671,25 +6871,28 @@
         [0xc8a36a, 0.05, 26, 1],
         [0xc2453a, 0.06, 22, 1]
       ].map(f => ({ m: sm2(f[0]), r: f[1], n: f[2], s: f[3] }));
+      FR.forEach(f => { f.m.flatShading = true; });
       const CR = [
-        [0.9, 0, 1.45, 0],
-        [0.7, 0.55, 1.35, 0.2],
-        [0.7, -0.5, 1.3, -0.25],
-        [0.65, 0, 1.35, -0.55],
-        [0.6, 0.1, 1.95, 0.1],
-        [0.5, -0.2, 2.2, 0]
+        [0.62, 0, 1.52, 0],
+        [0.48, 0.38, 1.95, 0.2],
+        [0.5, -0.34, 2.15, -0.2],
+        [0.44, 0.12, 2.48, -0.32],
+        [0.38, -0.1, 2.82, 0.12],
+        [0.3, 0.06, 3.12, 0]
       ];
       FR.forEach(f =>
         kinds.push((x, z) => {
           const g = mk(x, z);
           g.scale.setScalar(f.s * (0.85 + rx() * 0.3));
+          const crownLean = (rx() - 0.5) * 0.14;
           cyl(0.1, 0.17, 1, bk, 0, 0.5, 0, g);
-          cyl(0.17, 0.24, 0.2, bk, 0, 0.1, 0, g);
+          cyl(0.1, 0.15, 2.1, bk, 0, 1.05, 0, g);
           CR.forEach((q, j) => {
-            const m = new THREE.Mesh(leafGeo, j < 4 ? treeMat : treeMat2);
-            m.position.set(q[1], q[2], q[3]);
-            m.scale.set(q[0], q[0] * 0.85, q[0]);
-            m.castShadow = true;
+            const m = new THREE.Mesh(treeLeafGeo, j < 4 ? treeMat : treeMat2);
+            m.position.set(q[1] + q[2] * crownLean, q[2], q[3] - q[2] * crownLean * 0.35);
+            m.scale.set(q[0] * 0.92, q[0] * 1.08, q[0] * 0.88);
+            m.rotation.set((j % 2 ? 0.08 : -0.06), j * 0.71, (j % 3 - 1) * 0.06);
+            m.castShadow = j === 0;
             g.add(m);
           });
           for (let i = 0; i < f.n; i++) {
@@ -6798,45 +7001,12 @@
           }
           return false;
         }
-      const paddyM = sm2(0x9cc7a0),
-        riceM = sm2(0x9fc45a),
-        riceG = sm2(0xd6c35a),
-        stemG = sm2(0x5f8a45),
+      const stemG = sm2(0x5f8a45),
         sunY = sm2(0xf2b81f),
         sunB = sm2(0x5a3a1e),
         dm3 = new THREE.Object3D(),
         wdS = sm2(0xc89b5a),
         rfS = sm2(0xc27b5a);
-      for (const tts of [
-        [0.22, 0.36],
-        [0.64, 0.9]
-      ])
-        patch(tts, 8.5, 5.6, o => {
-          const g = mk(o.x, o.z);
-          g.rotation.y = Math.atan2(o.tn.x, o.tn.z);
-          box(6.4, 0.05, 9, paddyM, 0, 0.02, 0, g);
-          const riceGeo = new THREE.BufferGeometry();
-          riceGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-0.1,0,0, 0.1,0,0, 0,0.55,0, 0,0,-0.1, 0,0,0.1, 0,0.55,0]), 3));
-          riceGeo.computeVertexNormals();
-          const im = new THREE.InstancedMesh(
-            riceGeo,
-            rx() < 0.4 ? riceG : riceM,
-            80
-          );
-          let c = 0;
-          for (let r = 0; r < 8; r++)
-            for (let q = 0; q < 10; q++) {
-              dm3.position.set((r - 3.5) * 0.75, 0.3, (q - 4.5) * 0.9);
-              dm3.rotation.set(0, rx() * 3, 0);
-              dm3.scale.set(1, 0.8 + rx() * 0.4, 1);
-              dm3.updateMatrix();
-              im.setMatrixAt(c++, dm3.matrix);
-            }
-          im.frustumCulled = false;
-          im.visible = true; // เปิดให้มองเห็นแปลงนา
-          g.add(im);
-          PADS.push([g, im.material === riceG]);
-        });
       const hdG = new THREE.CylinderGeometry(0.2, 0.2, 0.05, 12).rotateZ(Math.PI / 2),
         ctG = new THREE.CylinderGeometry(0.1, 0.1, 0.06, 10).rotateZ(Math.PI / 2),
         stG = new THREE.CylinderGeometry(0.02, 0.03, 1.3, 5);
@@ -6934,8 +7104,9 @@
         for (let tier = 0; tier < 3; tier++) {
           const y = 3.35 + tier * 0.64,
             reach = 2.05 - tier * 0.42;
-          for (let b = 0; b < 6; b++) {
-            const angle = (b / 6) * Math.PI * 2 + tier * 0.34,
+          for (let b = 0; b < 5; b++) {
+            const angle = (b / 5) * Math.PI * 2 + tier * 0.38,
+              leafVariation = 0.76 + ((tier * 5 + b * 3) % 7) * 0.075,
               dx = Math.cos(angle),
               dz = Math.sin(angle),
               end = new THREE.Vector3(dx * reach, y + 0.38, dz * reach),
@@ -6952,10 +7123,15 @@
               tier === 2 ? _sacredLeafLight : b % 3 ? _sacredLeafMid : _sacredLeafDark
             );
             foliage.position.copy(end);
-            foliage.scale.set(0.92 - tier * 0.12, 0.34, 0.58 - tier * 0.06);
-            foliage.rotation.y = angle;
-            foliage.rotation.z = -0.12;
-            foliage.castShadow = tier === 0;
+            foliage.position.x += Math.sin(tx + tz) * (0.08 + tier * 0.04);
+            foliage.position.z += Math.cos(tx - tz) * (0.06 + tier * 0.03);
+            if ((tier * 5 + b * 3) % 4 === 0) {
+              const roundSize = (0.72 - tier * 0.08) * leafVariation;
+              foliage.scale.set(roundSize, roundSize * 0.78, roundSize * 0.9);
+            } else {
+              foliage.scale.set((0.92 - tier * 0.12) * leafVariation, 0.26 + leafVariation * 0.11, (0.58 - tier * 0.06) * (1.12 - leafVariation * 0.2));
+            }
+            foliage.rotation.set((b % 3 - 1) * 0.07, angle + (b % 2 ? 0.12 : -0.08), -0.12 + (tier - 1) * 0.08);
             tg.add(foliage);
           }
         }
@@ -8126,7 +8302,7 @@
         const mode = state.qualityMode === 'auto' ? 'อัตโนมัติ' : 'กำหนดเอง';
         $('qualityInfo').textContent = nearPerformanceHotspot
           ? `(${mode}: ลดชั่วคราวใกล้${performanceHotspotLabel} · ${names[level]} · เงาปิด)`
-          : `(${mode}: ${names[level]} · เงา${level >= 3 ? 'เปิด' : 'ปิด'})`;
+          : `(${mode}: ${names[level]} · เงา${level >= 2 ? 'เปิด' : 'ปิด'})`;
       }
     }
     function applyQuality() {
@@ -8134,7 +8310,7 @@
       const hotspotCap = performanceHotspotLabel === 'งานวัด' ? 0 : 1;
       const level = nearPerformanceHotspot ? Math.min(requestedLevel, hotspotCap) : requestedLevel;
       if (level !== activeQuality) {
-        const shadows = level >= 3;
+        const shadows = level >= 2;
         const shadowSizes = coarsePointer ? [512, 512, 512, 512, 512] : [512, 512, 512, 1024, 1024];
         const size = shadowSizes[level];
         if (sunLight.shadow.map) {
@@ -9541,6 +9717,7 @@
           <span><i class="lg-line" style="--map-color:#b27b4f"></i>เส้นทางขึ้นดอย · 135–200 กม.</span>
           <span><i class="lg-line lg-village"></i>ชุมชนชนบท</span>
           <span><i class="lg-field" style="display:inline-block;width:12px;height:10px;border:1px solid #6b9863;background:#a9c95a"></i>ทุ่งนา</span>
+          <span><i class="lg-field" style="display:inline-block;width:12px;height:10px;border:1px solid #806c36;background:#b9c96b"></i>สวนข้าวโพด</span>
           <span><i class="lg-dot" style="background:#2d8062"></i>จุดชาร์จ EV</span>
           <span>${svgIcon('boat')}แม่น้ำ</span>
           <span>${svgIcon('school')}โรงเรียน</span>
@@ -9637,13 +9814,14 @@
     // ตำแหน่งสถานที่พิเศษทั้งหมดในฉาก
     const SPECIAL_PLACES = [
       // โซนเกษตรกรรมและธรรมชาติ
-      { t: 0.705, label: 'ไร่ข้าวโพด', color: '#d9a05b', type: 'zone' },
+      { t: 0.778, label: 'สวนข้าวโพด', color: '#879b3f', type: 'zone', field: true },
       { t: 0.755, label: 'แม่น้ำ', color: '#2b7ea6', type: 'zone' },
       { t: 0.805, label: 'สวนผลไม้', color: '#e98f7d', type: 'zone' },
       { t: 0.90, label: 'สวนมะพร้าว', color: '#4f8bb0', type: 'zone' },
       // ท่าเรือริมแม่น้ำ
       { t: 0.755, label: 'ท่าเรือ', color: '#2b7ea6', type: 'poi' },
       // หนองน้ำสวนมะพร้าว & ยอยักษ์
+      { t: 0.885, label: 'ทุ่งนาสองฝั่ง', color: '#bda64d', type: 'zone' },
       { t: 0.885, label: 'หนองน้ำ & ยอยักษ์', color: '#0284c7', type: 'poi' },
       // 7-Eleven (เหลือเฉพาะสาขาต้นทาง — เอาสาขาแถวหนองน้ำออก)
       { t: 0.016, label: '7-11', color: '#1f7a4d', type: 'poi' },
@@ -9667,9 +9845,9 @@
       EV_RESCUE_ARRIVAL_MS = 3200,
       EV_RESCUE_CHARGE_MS = 2600,
       EV_STATIONS = [
-        { id: 'paddy', km: 145, name: 'ทุ่งนาพักใจ', side: 1, visited: false },
+        { id: 'paddy', km: kmAt(0.885), t: 0.885, name: 'ทุ่งนาสองฝั่ง', side: -1, visited: false },
         { id: 'mountain', km: 184, name: 'จุดชมวิวภูเขา', side: -1, visited: false }
-      ].map(station => ({ ...station, t: tAt(station.km) }));
+      ].map(station => ({ ...station, t: station.t !== undefined ? station.t : tAt(station.km) }));
     let evBattery = 72,
       evStation = null,
       evMode = 'drive',
@@ -9969,10 +10147,10 @@
       for (const delta of offsets) {
         const t = Math.max(0.02, Math.min(0.98, targetT + delta));
         for (const side of [station.side, -station.side]) {
-          for (const setback of [12, 16, 20, 24, 28, 32]) {
+          for (const setback of [8.2, 9.5, 11, 12, 16, 20, 24, 28, 32]) {
             const candidate = offRoad(t, side * setback);
             if (
-              !spotOK(candidate.x, candidate.z, 8) ||
+              !spotOK(candidate.x, candidate.z, 4.6, false, station.id === 'paddy') ||
               !clearOfTempleSites(candidate.x, candidate.z, 24)
             ) continue;
             site = { ...candidate, t, side };
@@ -10117,24 +10295,30 @@
         c.restore();
       });
 
-      const drawRicePlot = (x, z, width, depth, color) => {
-        const [px, py] = mproj(x, z),
-          w = width * mapBox.k,
-          h = depth * mapBox.k;
-        c.fillStyle = color;
-        c.fillRect(px - w / 2, py - h / 2, w, h);
-        c.strokeStyle = 'rgba(72, 111, 63, 0.55)';
+      for (const riceSide of RICE_FIELD_SIDES) {
+        c.beginPath();
+        riceSide.outline.forEach((point, index) => {
+          const [x, y] = mproj(point.x, point.z);
+          index === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
+        });
+        c.closePath();
+        c.fillStyle = '#bda64d';
+        c.fill();
+        c.strokeStyle = 'rgba(72, 91, 48, 0.76)';
+        c.lineWidth = 1.5;
+        c.stroke();
+        c.strokeStyle = 'rgba(242, 222, 130, 0.72)';
         c.lineWidth = 1;
-        c.strokeRect(px - w / 2, py - h / 2, w, h);
-      };
-      MAP_RICE_FIELDS.forEach(q => {
-        const color = `#${q.c.toString(16).padStart(6, '0')}`;
-        drawRicePlot(q[0], q[1], 14.4, 14.4, color);
-      });
-      PADS.forEach(([group, ripe]) => {
-        const position = group.getWorldPosition(new THREE.Vector3());
-        drawRicePlot(position.x, position.z, 8.5, 11, ripe ? '#d9c25a' : '#8fbf5a');
-      });
+        for (const t of [0.2, 0.4, 0.6, 0.8]) {
+          c.beginPath();
+          riceSide.inner.forEach((inner, index) => {
+            const outer = riceSide.outer[index],
+              [x, y] = mproj(inner.x + (outer.x - inner.x) * t, inner.z + (outer.z - inner.z) * t);
+            index === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
+          });
+          c.stroke();
+        }
+      }
 
       c.lineCap = c.lineJoin = 'round';
       const drawRoadSegment = (a, b, w, col, dash = []) => {
@@ -10211,6 +10395,49 @@
           c.fillRect(-3, -2, 5, 4);
           c.restore();
         }
+      }
+
+      // วาดตำแหน่งและแถวสวนข้าวโพดริมฝั่งถนนให้ตรงกับฉาก 3D
+      if (RIVER_PTS.length > 1) {
+        const startT = CORN_FIELD_T0 + (CORN_FIELD_T1 - CORN_FIELD_T0) * 0.04,
+          endT = CORN_FIELD_T1 - (CORN_FIELD_T1 - CORN_FIELD_T0) * 0.04,
+          samples = 32;
+        c.save();
+        c.beginPath();
+        for (let i = 0; i <= samples; i++) {
+          const t = startT + ((endT - startT) * i) / samples,
+            p = cornFieldPoint(t),
+            [x, y] = mproj(p.x, p.z);
+          i === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
+        }
+        for (let i = samples; i >= 0; i--) {
+          const t = startT + ((endT - startT) * i) / samples,
+            p = cornFieldPoint(t, cornFieldDepth(t)),
+            [x, y] = mproj(p.x, p.z);
+          c.lineTo(x, y);
+        }
+        c.closePath();
+        c.fillStyle = '#b9c96b';
+        c.fill();
+        c.strokeStyle = '#806c36';
+        c.lineWidth = 1.5;
+        c.stroke();
+        c.strokeStyle = 'rgba(86, 107, 47, 0.5)';
+        c.lineWidth = 1;
+        for (let row = 0; row < Math.floor(CORN_FIELD_DEPTH / CORN_ROW_SPACING); row++) {
+          const rowStart = cornFieldRowStart(row);
+          if (rowStart === null) continue;
+          c.beginPath();
+          for (let i = 0; i <= samples; i++) {
+            const progress = rowStart + ((0.96 - rowStart) * i) / samples,
+              t = CORN_FIELD_T0 + (CORN_FIELD_T1 - CORN_FIELD_T0) * progress,
+              p = cornFieldPoint(t, CORN_ROW_SPACING * (row + 0.5)),
+              [x, y] = mproj(p.x, p.z);
+            i === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
+          }
+          c.stroke();
+        }
+        c.restore();
       }
 
       // วาดหนองน้ำใหญ่โซนสวนมะพร้าวลงบนแผนที่ความทรงจำ
@@ -10401,8 +10628,11 @@
         const temple = sp.label === 'วัด'
           ? window.__TEMPLES?.find(site => Math.abs(site.t - sp.t) < 0.001)
           : null;
-        const p = temple || route.getPoint(sp.t);
-        const [qx, qy] = mproj(p.x, p.z);
+        const p = temple || route.getPoint(sp.t),
+          mapPoint = sp.field
+            ? cornFieldPoint(sp.t, cornFieldDepth(sp.t) * 0.5)
+            : p,
+          [qx, qy] = mproj(mapPoint.x, mapPoint.z);
         if (sp.type === 'zone') {
           drawMapLabel(sp.label, qx, qy, sp.color);
         } else if (sp.label === 'วัด') {
@@ -10898,12 +11128,14 @@
         g.computeVertexNormals();
         g.computeBoundingSphere();
 
-        const waterMat = new THREE.MeshBasicMaterial({
+        const waterMat = new THREE.MeshStandardMaterial({
           vertexColors: true,
           side: THREE.DoubleSide,
           fog: true,          // <-- เปิดรับหมอกระยะไกลให้น้ำค่อยๆ จางกลืนไปกับขอบฟ้า ไม่ลอยโดด
           transparent: true,
           opacity: 0.88,      // <-- ให้ผิวน้ำมีความโปร่งแสงนิดๆ ดูนุ่มตาขึ้น
+          roughness: 0.3,
+          metalness: 0.04,
           depthWrite: true,
           polygonOffset: true,
           polygonOffsetFactor: -4,
@@ -10991,6 +11223,7 @@
               for (let k = 0; k < K - 1; k++) {
                 const a = base + i * K + k,
                   b = a + K;
+                if (side > 0 && Math.abs((q.t + P[i + 1].t) * 0.5 - BRIDGE_T) < 0.0025) continue;
                 if (side > 0) idx.push(a, a + 1, b, a + 1, b + 1, b);
                 else idx.push(a, b, a + 1, a + 1, b, b + 1);
               }
@@ -11030,6 +11263,7 @@
         let n = 0;
         for (let i = 1; i < N - 1 && n < COUNT; i++) {
           for (const side of [1, -1]) {
+            if (side > 0 && Math.abs(P[i].t - BRIDGE_T) < 0.003) continue;
             if (RR() < 0.35) continue;
             const clump = 2 + Math.floor(RR() * 4);
             const cs = side * (P[i].w + 0.2 + RR() * 2.2);
@@ -11059,6 +11293,7 @@
           const side = RR() < 0.5 ? 1 : -1,
             [x, z] = at(i, side * (P[i].w - 0.4 + RR() * 1.4)),
             s = 0.18 + RR() * 0.45;
+          if (side > 0 && Math.abs(P[i].t - BRIDGE_T) < 0.003) continue;
           D3.position.set(x, -0.1, z);
           D3.rotation.set(RR(), RR() * 6, RR());
           D3.scale.set(s * 1.3, s * 0.6, s);
@@ -11072,18 +11307,18 @@
 
         // แนวต้นไม้และกอไผ่ฝั่งตรงข้าม (ฉากหลังให้แม่น้ำดูร่มรื่น)
         const trunkG = new THREE.CylinderGeometry(0.16, 0.26, 2.6, 5).translate(0, 1.3, 0),
-          crownG = new THREE.IcosahedronGeometry(1, 1).scale(1.35, 0.42, 1.3).translate(0, 3.65, 0),
+          crownG = new THREE.IcosahedronGeometry(1, 0).translate(0, 3.05, 0),
           TC = 110,
           trunks = new THREE.InstancedMesh(trunkG, new THREE.MeshLambertMaterial({ color: 0x7d6648 }), TC),
           crowns = new THREE.InstancedMesh(crownG, new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true }), TC * 6),
           c = new THREE.Color();
         const canopyBlobs = [
-          [0, 0, 0, 0.92, 0.42, 0.96],
-          [1.1, 0.1, 0.12, 0.68, 0.3, 0.72],
-          [-1.08, 0.16, -0.08, 0.7, 0.32, 0.68],
-          [0.18, 0.08, 1.08, 0.66, 0.3, 0.7],
-          [-0.12, 0.12, -1.02, 0.64, 0.32, 0.66],
-          [0.08, 0.48, 0.02, 0.62, 0.28, 0.64]
+          [0, 0.02, 0, 0.96, 0.86, 0.98],
+          [1.1, 0.12, 0.12, 0.72, 0.72, 0.75],
+          [-1.08, 0.18, -0.08, 0.78, 0.74, 0.74],
+          [0.18, 0.08, 1.08, 0.7, 0.7, 0.73],
+          [-0.12, 0.2, -1.02, 0.75, 0.72, 0.73],
+          [0.08, 0.58, 0.02, 0.66, 0.68, 0.69]
         ];
         let tcount = 0, crownCount = 0;
         for (let i = 1; i < N - 1 && tcount < TC; i++) {
@@ -11100,8 +11335,10 @@
           for (let bi = 0; bi < canopyBlobs.length; bi++) {
             const blob = canopyBlobs[bi],
               angle = yaw + (RR() - 0.5) * 0.24,
-              ox = (blob[0] * Math.cos(yaw) + blob[2] * Math.sin(yaw)) * s,
-              oz = (-blob[0] * Math.sin(yaw) + blob[2] * Math.cos(yaw)) * s;
+              windLean = 0.08 + RR() * 0.1,
+              localX = blob[0] + windLean * blob[1],
+              ox = (localX * Math.cos(yaw) + blob[2] * Math.sin(yaw)) * s,
+              oz = (-localX * Math.sin(yaw) + blob[2] * Math.cos(yaw)) * s;
             D3.position.set(x + ox, -0.1 + blob[1] * sy, z + oz);
             D3.rotation.set(0, angle, 0);
             D3.scale.set(s * blob[3], sy * blob[4], s * blob[5]);
@@ -11845,6 +12082,130 @@
       return { root, update, nearBoat: () => Math.sqrt(nearest) };
     })();
     window.__RIVER = RIVER;
+    if (RIVER.root.userData.waterMat && RIVER.root.userData.rippleMat) {
+      const bridgeP = route.getPoint(bridgeT);
+      const bridgeTn = route.getTangent(bridgeT);
+      const normalX = bridgeTn.z,
+        normalZ = -bridgeTn.x;
+      let nearRiverPoint = RIVER_PTS[0];
+      for (const point of RIVER_PTS) {
+        if (Math.abs(point.t - bridgeT) < Math.abs(nearRiverPoint.t - bridgeT)) nearRiverPoint = point;
+      }
+      const riverCenterX =
+        (nearRiverPoint.x - bridgeP.x) * normalX + (nearRiverPoint.z - bridgeP.z) * normalZ;
+      const yaw = Math.atan2(bridgeTn.x, bridgeTn.z);
+      const xStart = riverCenterX - nearRiverPoint.w + 4.5;
+      const xEnd = -18;
+      const rowCount = 64;
+      const waterAcross = [-1, -0.82, -0.5, -0.18, 0.18, 0.5, 0.82, 1];
+      const bankAcross = [
+        -7, -6.5, -6, -5.5, -5, -4.5, -4, -3.5, -3, -2.7,
+        2.7, 3, 3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7
+      ];
+      const waterPositions = [],
+        waterColors = [],
+        waterUvs = [],
+        waterIndices = [],
+        bankPositions = [],
+        bankUvs = [],
+        bankIndices = [];
+      const shallowColor = new THREE.Color(0x8ab8cc),
+        midColor = new THREE.Color(0x5b92ad),
+        deepColor = new THREE.Color(0x417591),
+        color = new THREE.Color();
+      const streamCenterZ = progress => Math.sin(progress * 6.2 + 0.8) * 0.55;
+      const smoothstep = value => {
+        const t = Math.max(0, Math.min(1, value));
+        return t * t * (3 - 2 * t);
+      };
+      const streamHalfWidth = progress => {
+        const taper = Math.min(1, 0.025 + progress * 5, 0.025 + (1 - progress) * 5);
+        return 5 * taper;
+      };
+      const streamWaterY = x => {
+        const slope = Math.max(0, Math.min(1, (xStart - x) / (xStart - 4.1)));
+        const easedSlope = slope * slope * (3 - 2 * slope);
+        return 0.084 - easedSlope * 0.5;
+      };
+
+      for (let row = 0; row <= rowCount; row++) {
+        const progress = row / rowCount;
+        const x = xStart + (xEnd - xStart) * progress;
+        const centerZ = streamCenterZ(progress);
+        const halfWidth = streamHalfWidth(progress);
+        const waterY = streamWaterY(x);
+        const bankScale = Math.max(0.02, Math.min(1, 0.025 + progress * 5, 0.025 + (1 - progress) * 5));
+        for (let k = 0; k < waterAcross.length; k++) {
+          const across = waterAcross[k];
+          const edge = Math.abs(across);
+          waterPositions.push(x, waterY, centerZ + across * halfWidth);
+          if (edge > 0.6) color.copy(midColor).lerp(shallowColor, (edge - 0.6) / 0.4);
+          else color.copy(deepColor).lerp(midColor, edge / 0.6);
+          waterColors.push(color.r, color.g, color.b);
+          waterUvs.push((across + 1) * 0.5, Math.abs(x - xStart) / 14);
+          if (row < rowCount && k < waterAcross.length - 1) {
+            const a = row * waterAcross.length + k;
+            const b = a + waterAcross.length;
+            waterIndices.push(a, b, a + 1, a + 1, b, b + 1);
+          }
+        }
+        const depthBlend = Math.min(
+          smoothstep(progress / 0.18),
+          smoothstep((1 - progress) / 0.14)
+        );
+        const bedY = waterY - 1.6 * depthBlend;
+        const shoulderY = waterY - 0.25 * depthBlend;
+        for (let k = 0; k < bankAcross.length; k++) {
+          const section = bankAcross[k];
+          const distance = Math.abs(section);
+          let y;
+          if (distance <= 2.7) y = bedY;
+          else if (distance <= 4) y = bedY + (shoulderY - bedY) * smoothstep((distance - 2.7) / 1.3);
+          else y = shoulderY + (-0.12 - shoulderY) * smoothstep((distance - 4) / 3);
+          const localZ = centerZ + section * bankScale;
+          bankPositions.push(x, y, localZ);
+          const worldX = bridgeP.x + Math.cos(yaw) * x + Math.sin(yaw) * localZ;
+          const worldZ = bridgeP.z - Math.sin(yaw) * x + Math.cos(yaw) * localZ;
+          bankUvs.push((worldX + 1200) / 2400, (1200 - worldZ) / 2400);
+          if (row < rowCount && k < bankAcross.length - 1) {
+            const a = row * bankAcross.length + k;
+            const b = a + bankAcross.length;
+            bankIndices.push(a, b, a + 1, a + 1, b, b + 1);
+          }
+        }
+      }
+
+      const streamRoot = new THREE.Group();
+      streamRoot.name = 'bridgeRiverChannel';
+      streamRoot.position.set(bridgeP.x, 0, bridgeP.z);
+      streamRoot.rotation.y = yaw;
+
+      const bankGeometry = new THREE.BufferGeometry();
+      bankGeometry.setAttribute('position', new THREE.Float32BufferAttribute(bankPositions, 3));
+      bankGeometry.setAttribute('uv', new THREE.Float32BufferAttribute(bankUvs, 2));
+      bankGeometry.setIndex(bankIndices);
+      bankGeometry.computeVertexNormals();
+      bankGeometry.computeBoundingSphere();
+      const banks = new THREE.Mesh(bankGeometry, groundMat);
+      banks.receiveShadow = true;
+      streamRoot.add(banks);
+
+      const waterGeometry = new THREE.BufferGeometry();
+      waterGeometry.setAttribute('position', new THREE.Float32BufferAttribute(waterPositions, 3));
+      waterGeometry.setAttribute('color', new THREE.Float32BufferAttribute(waterColors, 3));
+      waterGeometry.setAttribute('uv', new THREE.Float32BufferAttribute(waterUvs, 2));
+      waterGeometry.setIndex(waterIndices);
+      waterGeometry.computeVertexNormals();
+      waterGeometry.computeBoundingSphere();
+      const water = new THREE.Mesh(waterGeometry, RIVER.root.userData.waterMat);
+      water.renderOrder = 1;
+      streamRoot.add(water);
+      const ripples = new THREE.Mesh(waterGeometry, RIVER.root.userData.rippleMat);
+      ripples.position.y = 0.012;
+      ripples.renderOrder = 2;
+      streamRoot.add(ripples);
+      RIVER.root.add(streamRoot);
+    }
 
     // --- สร้าง UI สำหรับแสดง FPS ---
     const fpsCounter = document.createElement('div');
@@ -12279,8 +12640,8 @@
       } else if (minD >= 0.025 && state.routeT > T1 + 0.012) {
         const rt = state.routeT;
         if (rt >= 0.565 && rt < 0.655) {
-          ic = 'grain';
-          txt = 'เส้นทางชนบท · ทุ่งนาขั้นบันได';
+          ic = 'tree';
+          txt = 'เส้นทางชนบท · ชุมชนเกษตร';
         } else if (rt >= 0.655 && rt < 0.73) {
           ic = 'grain';
           txt = 'เส้นทางชนบท · ไร่ข้าวโพด';
@@ -12291,8 +12652,8 @@
           ic = 'fruit';
           txt = 'เส้นทางชนบท · สวนผลไม้';
         } else if (rt >= 0.86 && rt < 0.915) {
-          ic = 'lotus';
-          txt = 'หนองน้ำสวนมะพร้าว · วิถีชีวิตริมน้ำ & ยอยักษ์';
+          ic = 'grain';
+          txt = 'ทุ่งนาสองฝั่ง · หนองน้ำ & ยอยักษ์';
         } else if (rt >= 0.915 && rt < 0.94) {
           ic = 'tree';
           txt = 'เส้นทางชนบท · สวนมะพร้าว';
@@ -12979,10 +13340,11 @@
         }
         const makeForestCanopy = pine => {
           const positions = [],
+            colors = [],
             branchGeo = new THREE.CylinderGeometry(0.035, 0.085, 1, 5),
             leafGeo = new THREE.IcosahedronGeometry(1, 0),
             up = new THREE.Vector3(0, 1, 0);
-          const append = (geometry, position, quaternion, scale) => {
+          const append = (geometry, position, quaternion, scale, tintSeed = null) => {
             const source = geometry.index ? geometry.toNonIndexed() : geometry,
               vertex = new THREE.Vector3(),
               attribute = source.attributes.position;
@@ -12990,54 +13352,89 @@
               vertex.set(attribute.getX(i) * scale.x, attribute.getY(i) * scale.y, attribute.getZ(i) * scale.z);
               vertex.applyQuaternion(quaternion).add(position);
               positions.push(vertex.x, vertex.y, vertex.z);
+              const facetTint = tintSeed === null ? 1 : 0.9 + ((Math.floor(i / 3) + tintSeed) % 5) * 0.05;
+              colors.push(facetTint, facetTint, facetTint);
             }
             if (source !== geometry) source.dispose();
           };
-          const tierCount = pine ? 6 : 3,
-            branchesPerTier = pine ? 6 : 5,
-            tierSpacing = pine ? 0.55 : 0.62,
-            firstY = pine ? 1.55 : 1.55;
-          for (let tier = 0; tier < tierCount; tier++) {
-            const progress = tier / Math.max(1, tierCount - 1),
-              reach = pine ? 1.38 - progress * 0.76 : 1.25 - progress * 0.48,
-              y = firstY + tier * tierSpacing;
-            for (let branchIndex = 0; branchIndex < branchesPerTier; branchIndex++) {
-              const angle = (branchIndex / branchesPerTier) * Math.PI * 2 + tier * (pine ? 0.3 : 0.44),
-                direction = new THREE.Vector3(Math.cos(angle), pine ? -0.12 + progress * 0.3 : 0.24, Math.sin(angle)).normalize(),
-                length = reach * (0.9 + ((branchIndex + tier) % 3) * 0.05),
-                start = new THREE.Vector3(0, y, 0),
-                end = start.clone().addScaledVector(direction, length),
-                branchMid = start.clone().lerp(end, 0.5),
-                branchRotation = new THREE.Quaternion().setFromUnitVectors(up, direction),
-                foliageRotation = new THREE.Quaternion().setFromAxisAngle(up, angle);
-              append(branchGeo, branchMid, branchRotation, new THREE.Vector3(0.72, length, 0.72));
-              append(
-                leafGeo,
-                end,
-                foliageRotation,
-                pine
-                  ? new THREE.Vector3(length * 0.54, 0.13, 0.24)
-                  : new THREE.Vector3(0.58, 0.23, 0.34)
-              );
-            }
-          }
           if (pine) {
-            const tip = new THREE.ConeGeometry(0.12, 0.68, 6).translate(0, firstY + tierCount * tierSpacing, 0);
-            append(tip, new THREE.Vector3(), new THREE.Quaternion(), new THREE.Vector3(1, 1, 1));
-            tip.dispose();
+            const tierCount = 6,
+              tierSpacing = 0.48,
+              tierHeight = 1.35;
+            for (let tier = 0; tier < tierCount; tier++) {
+              const progress = tier / (tierCount - 1),
+                radius = 1.42 * Math.pow(1 - progress, 0.9) + 0.28,
+                height = tierHeight - progress * 0.22,
+                layer = new THREE.ConeGeometry(radius, height, 7, 1, true),
+                rotation = new THREE.Quaternion().setFromAxisAngle(up, tier % 2 ? 0.18 : -0.08);
+              append(
+                layer,
+                new THREE.Vector3(0, 1.55 + tier * tierSpacing, 0),
+                rotation,
+                new THREE.Vector3(1, 1, 1),
+                tier * 7
+              );
+              layer.dispose();
+            }
+          } else {
+            const tierCount = 3,
+              branchesPerTier = 6;
+            append(
+              leafGeo,
+              new THREE.Vector3(0, 2.38, 0),
+              new THREE.Quaternion(),
+              new THREE.Vector3(0.82, 0.68, 0.82),
+              37
+            );
+            for (let tier = 0; tier < tierCount; tier++) {
+              const progress = tier / (tierCount - 1),
+                reach = 1.35 - progress * 0.35,
+                y = 1.55 + tier * 0.62;
+              for (let branchIndex = 0; branchIndex < branchesPerTier; branchIndex++) {
+                const angle = (branchIndex / branchesPerTier) * Math.PI * 2 + tier * 0.44,
+                  direction = new THREE.Vector3(Math.cos(angle) + 0.1, 0.24, Math.sin(angle) - 0.07).normalize(),
+                  length = reach * (0.9 + ((branchIndex + tier) % 3) * 0.05),
+                  start = new THREE.Vector3(0, y, 0),
+                  end = start.clone().addScaledVector(direction, length),
+                  branchMid = start.clone().lerp(end, 0.5),
+                  branchRotation = new THREE.Quaternion().setFromUnitVectors(up, direction),
+                  foliageRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+                    ((branchIndex + tier) % 3 - 1) * 0.09,
+                    angle + (((branchIndex * 3 + tier) % 5) - 2) * 0.08,
+                    (progress - 0.35) * 0.12
+                  )),
+                  sizeVariation = 0.88 + ((tier * 5 + branchIndex * 3) % 7) * 0.07,
+                  roundLeaf = (tier * 7 + branchIndex * 3) % 4 === 0;
+                append(branchGeo, branchMid, branchRotation, new THREE.Vector3(0.72, length, 0.72));
+                append(
+                  leafGeo,
+                  end,
+                  foliageRotation,
+                  roundLeaf
+                    ? new THREE.Vector3(
+                      0.52 + sizeVariation * 0.14,
+                      (0.52 + sizeVariation * 0.14) * (0.72 + sizeVariation * 0.12),
+                      (0.52 + sizeVariation * 0.14) * (0.82 + sizeVariation * 0.1)
+                    )
+                    : new THREE.Vector3(0.62 + sizeVariation * 0.24, 0.28 + sizeVariation * 0.18, 0.34 + sizeVariation * 0.19),
+                  tier * 11 + branchIndex * 3
+                );
+              }
+            }
           }
           branchGeo.dispose();
           leafGeo.dispose();
           const geometry = new THREE.BufferGeometry();
           geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+          geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
           geometry.computeVertexNormals();
           return geometry;
         };
         const gT = new THREE.CylinderGeometry(0.14, 0.22, 2.2, 5).translate(0, 1.1, 0),
           gB = makeForestCanopy(false),
           gC = makeForestCanopy(true),
-          gT2 = new THREE.CylinderGeometry(0.09, 0.2, 5.2, 6).translate(0, 2.6, 0),
-          fm = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
+          gT2 = new THREE.CylinderGeometry(0.09, 0.2, 4, 6).translate(0, 2, 0),
+          fm = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, vertexColors: true });
         const br = T.filter(t => t[4]),
           co = T.filter(t => !t[4]),
           mk = (g, m, L, tr) => {
@@ -14403,9 +14800,9 @@
       const waterM = new THREE.MeshStandardMaterial({
           color: 0x0284c7,
           emissive: 0x0369a1,
-          emissiveIntensity: 0.32,
-          roughness: 0.06,
-          metalness: 0.15
+          emissiveIntensity: 0.08,
+          roughness: 0.28,
+          metalness: 0.04
         }),
         PD = [];
       {
@@ -14416,9 +14813,9 @@
           shallowRimM = new THREE.MeshStandardMaterial({
             color: 0x38bdf8,
             emissive: 0x0284c7,
-            emissiveIntensity: 0.28,
-            roughness: 0.08,
-            metalness: 0.1
+            emissiveIntensity: 0.08,
+            roughness: 0.3,
+            metalness: 0.04
           }),
           bankRockM = mt(0x78756e),
           padG = new THREE.CircleGeometry(0.5, 8).rotateX(-Math.PI / 2),
@@ -14501,53 +14898,339 @@
 
       /* ============================================================================
        * scene/38-life/05-rice-fields.js
-       * ทุ่งนากว้าง
+       * ทุ่งนาผืนใหญ่ข้างหนองน้ำ
        * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
-      /* ทุ่งนา */
-      const cells = [];
+      /* ทุ่งนาผืนใหญ่ต่อเนื่องทั้งสองฝั่งของถนน */
       {
-        const st = document.createElement('canvas');
-        st.width = st.height = 64;
-        const c = st.getContext('2d');
-        c.fillStyle = '#fff';
-        c.fillRect(0, 0, 64, 64);
-        c.fillStyle = 'rgba(60,90,40,.28)';
-        for (let i = 0; i < 64; i += 6) c.fillRect(0, i, 64, 2);
-        const tx = new THREE.CanvasTexture(st);
-        tx.wrapS = tx.wrapT = THREE.RepeatWrapping;
-        tx.repeat.set(1, 1);
-        const PL = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
-          fmat = new THREE.MeshStandardMaterial({ map: tx, roughness: 1 }),
-          cs = [],
-          PAL = [0x8fbf5a, 0x7fb04f, 0xa9c95a, 0xd9c25a, 0xc9a95a, 0x9c8456, 0x86b4c2, 0x6fa86a, 0xb7c75a];
-        for (let x = -160; x < 520; x += 21)
-          for (let z = -200; z < 460; z += 21) {
-            const cx = x + (LR() - 0.5) * 3,
-              cz = z + (LR() - 0.5) * 3;
-            if (inH(cx, cz, 1.25) || !spotOK(cx, cz, 14.5)) continue;
-            cs.push([cx, cz]);
+        const crossSegments = RICE_FIELD_LANE_COUNT * 2,
+          positions = [],
+          colors = [],
+          uvs = [],
+          indices = [],
+          color = new THREE.Color(),
+          fieldEdgeColor = new THREE.Color(0x789565),
+          stripeCanvas = document.createElement('canvas');
+        stripeCanvas.width = stripeCanvas.height = 128;
+        const stripeContext = stripeCanvas.getContext('2d');
+        stripeContext.fillStyle = '#fff';
+        stripeContext.fillRect(0, 0, 128, 128);
+        for (let x = 0; x < 128; x += 8) {
+          stripeContext.fillStyle = 'rgba(75, 86, 38, 0.18)';
+          stripeContext.fillRect(x, 0, 2, 128);
+        }
+        const stripeTexture = new THREE.CanvasTexture(stripeCanvas);
+        stripeTexture.wrapS = stripeTexture.wrapT = THREE.RepeatWrapping;
+        for (const riceSide of RICE_FIELD_SIDES) {
+          const baseVertex = positions.length / 3;
+          for (let i = 0; i < WETLAND_PTS.length; i++) {
+            const q = WETLAND_PTS[i],
+              nx = q.x - q.px,
+              nz = q.z - q.pz,
+              normalLength = Math.hypot(nx, nz) || 1,
+              ux = (nx / normalLength) * riceSide.side,
+              uz = (nz / normalLength) * riceSide.side,
+              edge = riceSide.inner[i];
+            const edgeBlend = Math.max(0, Math.min(1, i / 4, (WETLAND_PTS.length - 1 - i) / 4)),
+              smoothEdgeBlend = edgeBlend * edgeBlend * (3 - 2 * edgeBlend);
+            for (let j = 0; j <= crossSegments; j++) {
+              const t = j / crossSegments,
+                x = edge.x + ux * RICE_FIELD_DEPTH * t,
+                z = edge.z + uz * RICE_FIELD_DEPTH * t,
+                lane = Math.min(RICE_FIELD_LANE_COUNT - 1, Math.floor(Math.min(j, crossSegments - 1) / 2)),
+                variation = 0.96 + 0.04 * Math.sin(i * 0.8 + j * 1.1);
+              positions.push(x, 0.01, z);
+              color.setHex(RICE_FIELD_LANE_COLORS[lane]).multiplyScalar(variation);
+              color.lerp(fieldEdgeColor, 1 - smoothEdgeBlend);
+              colors.push(color.r, color.g, color.b);
+              uvs.push(t, i / 3);
+            }
           }
-        const fi = new THREE.InstancedMesh(PL, fmat, cs.length),
-          col = new THREE.Color();
-        cs.forEach((q, i) => {
-          D.position.set(q[0], 0.02 + LR() * 0.02, q[1]);
-          D.rotation.set(0, LR() < 0.5 ? 0 : Math.PI / 2, 0);
-          D.scale.set(16 + LR() * 2, 1, 16 + LR() * 2);
-          D.updateMatrix();
-          fi.setMatrixAt(i, D.matrix);
-          {
-            const _pc = pk(PAL);
-            fi.setColorAt(i, col.set(_pc).multiplyScalar(0.9 + LR() * 0.2));
-            q.c = _pc;
-            cells.push(q);
-            FIELDS.push(q);
+          for (let i = 0; i < WETLAND_PTS.length - 1; i++) {
+            for (let j = 0; j < crossSegments; j++) {
+              const a = baseVertex + i * (crossSegments + 1) + j,
+                b = a + crossSegments + 1;
+              indices.push(a, b, a + 1, a + 1, b, b + 1);
+            }
           }
-        });
-        fi.receiveShadow = true;
-        fi.frustumCulled = false;
-        scene.add(fi);
+        }
+        const fieldGeometry = new THREE.BufferGeometry();
+        fieldGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        fieldGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+        fieldGeometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+        fieldGeometry.setIndex(indices);
+        fieldGeometry.computeVertexNormals();
+        const field = new THREE.Mesh(
+          fieldGeometry,
+          new THREE.MeshStandardMaterial({
+            map: stripeTexture,
+            vertexColors: true,
+            roughness: 1,
+            side: THREE.DoubleSide
+          })
+        );
+        field.receiveShadow = true;
+        scene.add(field);
+
+        const bundPositions = [],
+          bundColors = [],
+          bundIndices = [],
+          bundPalette = [0x67583b, 0x90764a, 0x71834d, 0x92794d, 0x67583b],
+          bundCrossSections = 5,
+          bundColor = new THREE.Color();
+        function addRoughBundPath(points, roughSeed) {
+          if (points.length < 2) return;
+          const firstVertex = bundPositions.length / 3;
+          for (let i = 0; i < points.length; i++) {
+            const previous = points[Math.max(0, i - 1)],
+              next = points[Math.min(points.length - 1, i + 1)],
+              dx = next.x - previous.x,
+              dz = next.z - previous.z,
+              tangentLength = Math.hypot(dx, dz) || 1,
+              perpX = -dz / tangentLength,
+              perpZ = dx / tangentLength,
+              rough = Math.sin(i * 12.9898 + roughSeed * 78.233),
+              sideRough = Math.cos(i * 9.173 + roughSeed * 2.417),
+              centerShift = sideRough * 0.12,
+              halfWidth = 0.48 + rough * 0.19,
+              height = 0.25 + rough * 0.14,
+              offsets = [-halfWidth, -halfWidth * 0.28, 0, halfWidth * 0.28, halfWidth],
+              heights = [0.018, height * (0.4 + sideRough * 0.1), height, height * (0.58 - sideRough * 0.12), 0.018];
+            for (let section = 0; section < bundCrossSections; section++) {
+              bundPositions.push(
+                points[i].x + perpX * (centerShift + offsets[section]),
+                heights[section],
+                points[i].z + perpZ * (centerShift + offsets[section])
+              );
+              bundColor
+                .setHex(bundPalette[section])
+                .multiplyScalar(0.94 + Math.sin(i * 1.31 + section * 1.8 + roughSeed) * 0.08);
+              bundColors.push(bundColor.r, bundColor.g, bundColor.b);
+              if (i > 0 && section < bundCrossSections - 1) {
+                const a = firstVertex + (i - 1) * bundCrossSections + section,
+                  b = firstVertex + i * bundCrossSections + section;
+                bundIndices.push(a, b, a + 1, a + 1, b, b + 1);
+              }
+            }
+          }
+        }
+        const riceNormalAt = (q, side) => {
+          const nx = q.x - q.px,
+            nz = q.z - q.pz,
+            length = Math.hypot(nx, nz) || 1;
+          return { x: (nx / length) * side, z: (nz / length) * side };
+        };
+        for (const riceSide of RICE_FIELD_SIDES) {
+          for (let boundary = 0; boundary <= RICE_FIELD_LANE_COUNT; boundary++) {
+            const points = [];
+            for (let i = 0; i < WETLAND_PTS.length; i++) {
+              const normal = riceNormalAt(WETLAND_PTS[i], riceSide.side),
+                edge = riceSide.inner[i],
+                offset = boundary * RICE_FIELD_LANE_SPACING;
+              points.push({ x: edge.x + normal.x * offset, z: edge.z + normal.z * offset });
+            }
+            addRoughBundPath(points, riceSide.side * 11 + boundary * 1.7);
+          }
+          const crossBundRows = [];
+          for (let i = RICE_FIELD_STATION_STEP; i < WETLAND_PTS.length - 4; i += RICE_FIELD_STATION_STEP)
+            crossBundRows.push(i);
+          for (const i of crossBundRows) {
+            const normal = riceNormalAt(WETLAND_PTS[i], riceSide.side),
+              edge = riceSide.inner[i],
+              points = [];
+            for (let segment = 0; segment <= RICE_FIELD_LANE_COUNT * 2; segment++) {
+              const offset = (RICE_FIELD_DEPTH * segment) / (RICE_FIELD_LANE_COUNT * 2);
+              points.push({ x: edge.x + normal.x * offset, z: edge.z + normal.z * offset });
+            }
+            addRoughBundPath(points, riceSide.side * 19 + i * 0.6);
+          }
+        }
+        const canalTValues = [WETLAND_T0 - 0.0025, WETLAND_T1 + 0.0025],
+          canalSamples = 32,
+          canalWaterPositions = [],
+          canalWaterIndices = [],
+          canalBankPositions = [],
+          canalBankColors = [],
+          canalBankIndices = [],
+          canalColor = new THREE.Color();
+        function addNaturalCanal(riceSide, t, seedOffset) {
+          const routePoint = route.getPoint(t),
+            tangent = route.getTangent(t),
+            normal = { x: -tangent.z * riceSide.side, z: tangent.x * riceSide.side },
+            endpoint = t < WETLAND_T0 ? WETLAND_PTS[0] : WETLAND_PTS[WETLAND_PTS.length - 1],
+            endpointPoint = route.getPoint(endpoint.t),
+            endpointTangent = route.getTangent(endpoint.t),
+            endpointNormal = { x: -endpointTangent.z, z: endpointTangent.x },
+            wetlandOffset =
+              (endpoint.x - endpointPoint.x) * endpointNormal.x + (endpoint.z - endpointPoint.z) * endpointNormal.z,
+            fieldOffset =
+              riceSide.side > 0
+                ? wetlandOffset + endpoint.w + RICE_FIELD_MARGIN
+                : RICE_FIELD_ROAD_SIDE_OFFSET,
+            startOffset = Math.max(ROAD_HALF + 0.8, fieldOffset - 4),
+            length = RICE_FIELD_DEPTH + 8,
+            centers = [],
+            waterStart = canalWaterPositions.length / 3,
+            bankStart = canalBankPositions.length / 3;
+          for (let i = 0; i <= canalSamples; i++) {
+            const progress = i / canalSamples,
+              fade = Math.min(1, progress * 8, (1 - progress) * 8),
+              smoothFade = fade * fade * (3 - 2 * fade),
+              distance = startOffset + length * progress,
+              drift =
+                Math.sin(progress * Math.PI * 2.4 + seedOffset) * 1.15 +
+                Math.sin(progress * Math.PI * 5.2 + seedOffset * 0.63) * 0.38,
+              width =
+                (1.32 +
+                  Math.sin(progress * Math.PI * 3.6 + seedOffset * 0.81) * 0.24 +
+                  Math.cos(progress * Math.PI * 7.1 + seedOffset) * 0.12) *
+                smoothFade;
+            centers.push({
+              x: routePoint.x + normal.x * distance + tangent.x * drift,
+              z: routePoint.z + normal.z * distance + tangent.z * drift,
+              width,
+              fade: smoothFade
+            });
+          }
+          for (let i = 0; i <= canalSamples; i++) {
+            const center = centers[i],
+              previous = centers[Math.max(0, i - 1)],
+              next = centers[Math.min(canalSamples, i + 1)],
+              dx = next.x - previous.x,
+              dz = next.z - previous.z,
+              tangentLength = Math.hypot(dx, dz) || 1,
+              perpX = -dz / tangentLength,
+              perpZ = dx / tangentLength,
+              leftX = center.x + perpX * center.width,
+              leftZ = center.z + perpZ * center.width,
+              rightX = center.x - perpX * center.width,
+              rightZ = center.z - perpZ * center.width;
+            canalWaterPositions.push(leftX, 0.024, leftZ, rightX, 0.024, rightZ);
+            for (const side of [-1, 1]) {
+              const sideNoise = Math.sin(i * 2.17 + seedOffset + side * 0.8),
+                distances = [center.width, center.width + 0.85, center.width + 2.2],
+                heights = [0.02, 0.11 + center.fade * (0.045 + sideNoise * 0.025), 0.012],
+                palette = [0x495d4c, 0x796c48, 0x718357];
+              for (let section = 0; section < 3; section++) {
+                canalBankPositions.push(
+                  center.x + perpX * side * distances[section],
+                  heights[section],
+                  center.z + perpZ * side * distances[section]
+                );
+                canalColor.setHex(palette[section]).multiplyScalar(0.94 + sideNoise * 0.07);
+                canalBankColors.push(canalColor.r, canalColor.g, canalColor.b);
+              }
+            }
+            if (i > 0) {
+              const previousWater = waterStart + (i - 1) * 2,
+                currentWater = waterStart + i * 2;
+              canalWaterIndices.push(
+                previousWater,
+                currentWater,
+                previousWater + 1,
+                previousWater + 1,
+                currentWater,
+                currentWater + 1
+              );
+              for (let side = 0; side < 2; side++) {
+                for (let section = 0; section < 2; section++) {
+                  const previousBank = bankStart + (i - 1) * 6 + side * 3 + section,
+                    currentBank = bankStart + i * 6 + side * 3 + section;
+                  canalBankIndices.push(
+                    previousBank,
+                    currentBank,
+                    previousBank + 1,
+                    previousBank + 1,
+                    currentBank,
+                    currentBank + 1
+                  );
+                }
+              }
+            }
+          }
+        }
+        for (const riceSide of RICE_FIELD_SIDES)
+          canalTValues.forEach((t, i) => addNaturalCanal(riceSide, t, riceSide.side * 5 + i * 2.3));
+        const bundGeometry = new THREE.BufferGeometry();
+        bundGeometry.setAttribute('position', new THREE.Float32BufferAttribute(bundPositions, 3));
+        bundGeometry.setAttribute('color', new THREE.Float32BufferAttribute(bundColors, 3));
+        bundGeometry.setIndex(bundIndices);
+        bundGeometry.computeVertexNormals();
+        const bunds = new THREE.Mesh(
+          bundGeometry,
+          new THREE.MeshStandardMaterial({
+            vertexColors: true,
+            roughness: 1,
+            flatShading: true,
+            side: THREE.DoubleSide
+          })
+        );
+        bunds.name = 'rice-polygonal-bunds';
+        bunds.castShadow = true;
+        bunds.receiveShadow = true;
+        scene.add(bunds);
+        const canalWaterGeometry = new THREE.BufferGeometry(),
+          canalWater = new THREE.Mesh(
+            canalWaterGeometry,
+            new THREE.MeshStandardMaterial({ color: 0x356f70, roughness: 0.24, metalness: 0.08, side: THREE.DoubleSide })
+          ),
+          canalBankGeometry = new THREE.BufferGeometry(),
+          canalBanks = new THREE.Mesh(
+            canalBankGeometry,
+            new THREE.MeshStandardMaterial({
+              vertexColors: true,
+              roughness: 1,
+              flatShading: true,
+              side: THREE.DoubleSide
+            })
+          );
+        canalWaterGeometry.setAttribute('position', new THREE.Float32BufferAttribute(canalWaterPositions, 3));
+        canalWaterGeometry.setIndex(canalWaterIndices);
+        canalWaterGeometry.computeVertexNormals();
+        canalBankGeometry.setAttribute('position', new THREE.Float32BufferAttribute(canalBankPositions, 3));
+        canalBankGeometry.setAttribute('color', new THREE.Float32BufferAttribute(canalBankColors, 3));
+        canalBankGeometry.setIndex(canalBankIndices);
+        canalBankGeometry.computeVertexNormals();
+        canalWater.name = 'rice-entry-exit-streams';
+        canalBanks.name = 'rice-stream-banks';
+        canalWater.receiveShadow = true;
+        canalBanks.castShadow = true;
+        canalBanks.receiveShadow = true;
+        scene.add(canalBanks, canalWater);
+
+        for (const riceSide of RICE_FIELD_SIDES) {
+          for (let i = 3; i < WETLAND_PTS.length - 3; i += RICE_FIELD_STATION_STEP) {
+            const q = WETLAND_PTS[i],
+              before = WETLAND_PTS[i - 1],
+              after = WETLAND_PTS[i + 1],
+              nx = q.x - q.px,
+              nz = q.z - q.pz,
+              normalLength = Math.hypot(nx, nz) || 1,
+              ux = (nx / normalLength) * riceSide.side,
+              uz = (nz / normalLength) * riceSide.side,
+              edge = riceSide.inner[i],
+              yaw = Math.atan2(after.x - before.x, after.z - before.z);
+            for (let lane = 0; lane < RICE_FIELD_LANE_COUNT; lane++) {
+              const offset = (lane + 0.5) * RICE_FIELD_LANE_SPACING,
+                cell = [edge.x + ux * offset, edge.z + uz * offset];
+              cell.c = RICE_FIELD_LANE_COLORS[lane];
+              cell.yaw = yaw;
+              cell.nx = ux;
+              cell.nz = uz;
+              cell.lane = lane;
+              cell.side = riceSide.side;
+              const cellStep = Math.floor((i - 3) / RICE_FIELD_STATION_STEP);
+              const edgeProgress = Math.max(0, Math.min(1, (i - 3) / 10, (WETLAND_PTS.length - 4 - i) / 10)),
+                smoothProgress = edgeProgress * edgeProgress * (3 - 2 * edgeProgress);
+              cell.cropDensity = 0.45 + 0.55 * smoothProgress;
+              cell.water =
+                (lane === 2 && cellStep % 2 === (riceSide.side === -1 ? 0 : 1)) ||
+                (lane === 0 && cellStep % 4 === (riceSide.side === -1 ? 1 : 3));
+              FIELDS.push(cell);
+            }
+          }
+        }
       }
 
       /* ============================================================================
@@ -14556,20 +15239,7 @@
        * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
-      /* ================= ล้างแผ่นนาตารางสุ่มที่ทับโซนเกษตรกรรมก่อนวางหุ่นไล่กาและชาวนา ================= */
-      for (let i = FIELDS.length - 1; i >= 0; i--) {
-        if (FIELDS[i][0] > 85 && FIELDS[i][1] > -65) FIELDS.splice(i, 1);
-      }
-      scene.children.forEach(obj => {
-        if (obj.isInstancedMesh && obj.count === cells.length) {
-          const zeroM = new THREE.Matrix4().makeScale(0, 0, 0);
-          cells.forEach((q, idx) => {
-            if (q[0] > 85 && q[1] > -65) obj.setMatrixAt(idx, zeroM);
-          });
-          obj.instanceMatrix.needsUpdate = true;
-        }
-      });
-      // คัดเฉพาะแปลงนาที่อยู่ใกล้ถนน (มีกอข้าว 3D จริง) เพื่อให้ชาวนาดำนาและหุ่นไล่กาอยู่ในแปลงนาข้าว 100%
+      // คัดเฉพาะแนวแปลงในเขตทุ่งนาผืนใหญ่สำหรับข้าว 3D ชาวนา และหุ่นไล่กา
       const activeRiceCells = FIELDS.map(q => {
         let m = 1e9;
         for (let i = 0; i < routePts.length; i += 24) {
@@ -14579,12 +15249,13 @@
         }
         return { q, d: m };
       })
-        .filter(o => o.d < 42 * 42)
+        .filter(o => o.d < 110 * 110)
         .sort((a, b) => a.d - b.d)
-        .slice(0, 48)
+        .slice(0, 64)
         .map(o => o.q);
-      const plantedRiceCells = activeRiceCells.filter(q => q.c !== 0x9c8456 && q.c !== 0x86b4c2);
-      const safeRicePool = plantedRiceCells.length ? plantedRiceCells : activeRiceCells.length ? activeRiceCells : FIELDS;
+      const plantedRiceCells = activeRiceCells.filter(q => q.lane !== 2);
+      const safeRicePool = plantedRiceCells.length ? plantedRiceCells : activeRiceCells.length ? activeRiceCells : FIELDS,
+        safeRiceBySide = [-1, 1].map(side => safeRicePool.filter(q => q.side === side));
 
       // ฟังก์ชันสร้าง "หุ่นไล่กา (Scarecrow)" แบบละเอียดสมจริง ตั้งอยู่ชิด/ในแปลงนาข้าว
       const _scBambooM = mt(0x8f7452),
@@ -14659,20 +15330,22 @@
       {
         const tg = new THREE.CylinderGeometry(0.16, 0.26, 7.5, 6).translate(0, 3.75, 0),
           cg = new THREE.IcosahedronGeometry(1, 1).scale(2.7, 0.8, 2.7).translate(0, 7.7, 0),
-          pc = [];
-        for (let i = 0; i < 300 && pc.length < 48; i++) {
-          const q = pk(FIELDS),
-            x = q[0] + 10.5,
-            z = q[1] + 10.5;
-          if (inH(x, z, 1.2) || !spotOK(x, z, 1.5)) continue;
+          pc = [],
+          fieldEdgeCells = FIELDS.filter(q => q.lane === RICE_FIELD_LANE_COUNT - 1),
+          fieldEdgeBySide = [-1, 1].map(side => fieldEdgeCells.filter(q => q.side === side));
+        for (let i = 0; i < 120 && pc.length < 10; i++) {
+          const q = pk(fieldEdgeBySide[i % 2]),
+            x = q[0] + q.nx * 9,
+            z = q[1] + q.nz * 9;
+          if (inH(x, z, 1.2) || !spotOK(x, z, 1.5, false, true)) continue;
           taken.push([x, z, 1.8]);
-          pc.push([x, z, 0.85 + LR() * 0.5]);
+          pc.push([x, z, 0.85 + LR() * 0.5, q.yaw]);
         }
         const tm = new THREE.InstancedMesh(tg, mt(0x8a7352), pc.length),
           cm = new THREE.InstancedMesh(cg, mt(0x5f8a45), pc.length);
         pc.forEach((q, i) => {
           D.position.set(q[0], 0, q[1]);
-          D.rotation.set(0, LR() * 6, (LR() - 0.5) * 0.08);
+          D.rotation.set(0, q[3] + (LR() - 0.5) * 0.12, (LR() - 0.5) * 0.08);
           D.scale.setScalar(q[2]);
           D.updateMatrix();
           tm.setMatrixAt(i, D.matrix);
@@ -14683,16 +15356,16 @@
         scene.add(tm, cm);
         const rf = mt(0xc2a05a),
           po = mt(0x8f7452);
-        for (let i = 0, n = 0; i < 300 && n < 10; i++) {
-          const q = pk(activeRiceCells.length ? activeRiceCells : FIELDS),
-            x = q[0] - 8.2,
-            z = q[1] + 8.2;
-          if (inH(x, z, 1.2) || !spotOK(x, z, 2.5)) continue;
+        for (let i = 0, n = 0; i < 80 && n < 3; i++) {
+          const q = pk(fieldEdgeBySide[i % 2]),
+            x = q[0] + q.nx * 10,
+            z = q[1] + q.nz * 10;
+          if (inH(x, z, 1.2) || !spotOK(x, z, 2.5, false, true)) continue;
           taken.push([x, z, 2.5]);
           n++;
           const g = new THREE.Group();
           g.position.set(x, 0, z);
-          g.rotation.y = LR() * 6;
+          g.rotation.y = q.yaw + (LR() - 0.5) * 0.18;
           scene.add(g);
           for (const a of [-1, 1])
             for (const b of [-1, 1]) cyl(0.06, 0.07, 1.1, po, a * 0.9, 0.55, b * 0.8, g);
@@ -14702,20 +15375,31 @@
           cn(g, rf, 1.75, 1.1, 0, 3, 0).rotation.y = Math.PI / 4;
           box(2.1, 0.05, 1.8, mt(0xd8c49a), 0, 0.9, 0, g);
         }
-        // วางหุ่นไล่กาไว้ข้างในแปลงนาข้าวจริง (safeRicePool และแปลงนาริมทาง PADS)
-        for (let i = 0; i < Math.min(12, safeRicePool.length); i++) {
-          const q = safeRicePool[(i * 3) % safeRicePool.length];
-          makeScarecrow(q[0] + (LR() - 0.5) * 7, q[1] + (LR() - 0.5) * 7, LR() * 6.28);
+        // วางหุ่นไล่กาในแนวข้าวของทุ่งนาผืนใหญ่
+        for (let i = 0; i < Math.min(8, safeRicePool.length); i++) {
+          const pool = safeRiceBySide[i % 2].length ? safeRiceBySide[i % 2] : safeRicePool,
+            q = pool[Math.floor(i / 2) % pool.length];
+          const yaw = q.yaw || 0,
+            localX = (LR() - 0.5) * 5.5,
+            localZ = (LR() - 0.5) * 5.5,
+            cos = Math.cos(yaw),
+            sin = Math.sin(yaw);
+          makeScarecrow(
+            q[0] + localX * cos + localZ * sin,
+            q[1] - localX * sin + localZ * cos,
+            yaw + (LR() - 0.5) * 0.7
+          );
         }
-        PADS.forEach(pd => {
-          const pg = pd[0];
-          const wp = new THREE.Vector3(2.2, 0, -2.8).applyMatrix4(pg.matrixWorld);
-          makeScarecrow(wp.x, wp.z, pg.rotation.y + 0.4);
-        });
       }
-      // วางชาวนาก้มดำนา (mode: 'work') เฉพาะในแปลงนาที่มีต้นข้าว 3D จริงเท่านั้น (safeRicePool)
+      // วางชาวนาก้มดำนาในแถวของทุ่งนาผืนใหญ่
       for (let i = 0; i < 16; i++) {
-        const q = safeRicePool[i % safeRicePool.length];
+        const pool = safeRiceBySide[i % 2].length ? safeRiceBySide[i % 2] : safeRicePool,
+          q = pool[Math.floor(i / 2) % pool.length],
+          yaw = q.yaw || 0,
+          localX = (LR() - 0.5) * 8.5,
+          localZ = (LR() - 0.5) * 8.5,
+          cos = Math.cos(yaw),
+          sin = Math.sin(yaw);
         addP(
           {
             sk: pk(SK),
@@ -14730,8 +15414,8 @@
             k: 1
           },
           'work',
-          q[0] + (LR() - 0.5) * 8.5,
-          q[1] + (LR() - 0.5) * 8.5,
+          q[0] + localX * cos + localZ * sin,
+          q[1] - localX * sin + localZ * cos,
           0,
           0
         );
@@ -14979,26 +15663,95 @@
         });
       }
 
+      if (RIVER_PTS.length > 8) {
+        const swimIndex = Math.floor((RIVER_PTS.length - 1) * 0.42),
+          swimPoint = RIVER_PTS[swimIndex],
+          before = RIVER_PTS[Math.max(0, swimIndex - 1)],
+          after = RIVER_PTS[Math.min(RIVER_PTS.length - 1, swimIndex + 1)],
+          alongLength = Math.hypot(after.x - before.x, after.z - before.z) || 1,
+          alongX = (after.x - before.x) / alongLength,
+          alongZ = (after.z - before.z) / alongLength,
+          acrossX = -alongZ,
+          acrossZ = alongX,
+          swimmerOutfits = [
+            { top: 0x168aad, bt: 0x263b58 },
+            { top: 0xe76f51, bt: 0x31536b },
+            { top: 0x2a9d8f, bt: 0x263b58 }
+          ];
+        swimmerOutfits.forEach((outfit, index) => {
+          const along = (index - 1) * 3.2,
+            across = index === 1 ? 1.2 : -1.6,
+            x = swimPoint.x + alongX * along + acrossX * across,
+            z = swimPoint.z + alongZ * along + acrossZ * across,
+            swimmer = addP(
+              {
+                sk: pk(SK),
+                top: outfit.top,
+                bt: outfit.bt,
+                short: 1,
+                hair: pk(HC),
+                hs: 0,
+                v: 0,
+                k: 4
+              },
+              'swim',
+              x,
+              z,
+              0,
+              0
+            ),
+            ripple = new THREE.Mesh(
+              new THREE.RingGeometry(0.52, 0.68, 20),
+              new THREE.MeshBasicMaterial({
+                color: 0xc3e7e8,
+                transparent: true,
+                opacity: 0.38,
+                side: THREE.DoubleSide,
+                depthWrite: false
+              })
+            );
+          swimmer.g.scale.setScalar(0.78);
+          swimmer.g.position.set(x, 0.14, z);
+          swimmer.yaw = Math.atan2(-alongX, -alongZ);
+          swimmer.g.rotation.y = swimmer.yaw;
+          ripple.rotation.x = -Math.PI / 2;
+          ripple.position.y = -0.075;
+          swimmer.g.add(ripple);
+          swimmer.swimRing = ripple;
+        });
+      }
+
       /* ================= โซนใหม่ 4 โซน (t: 0.55 - 0.95) ================= */
 
       // วัสดุสำหรับทั้ง 4 โซนเกษตรกรรม
-      const paddyBaseM = sm2(0x7c6a46),
-        ridgeSoilM = sm2(0x6b533b),
+      const ridgeSoilM = sm2(0x6b533b),
         darkSoilM = sm2(0x543f2b),
-        strawGoldM = sm2(0xd9be6b),
         thatchRoofM = sm2(0xc9b068),
         bambooM = sm2(0x8c7148),
         fenceWoodM = sm2(0x9c7a50),
         crateWoodM = sm2(0xc49558),
         sackClothM = sm2(0xe2d0a4);
-      for (const soilMaterial of [paddyBaseM, ridgeSoilM, darkSoilM]) {
+      for (const soilMaterial of [ridgeSoilM, darkSoilM]) {
         soilMaterial.normalMap = earthNormalMap;
         soilMaterial.normalScale = new THREE.Vector2(0.12, 0.12);
       }
 
-      const cornStalkM = mt(0x5b8c32),
+      const cornFieldGroundM = new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          map: groundMat.map,
+          normalMap: groundMat.normalMap,
+          vertexColors: true,
+          roughness: 1,
+          side: THREE.DoubleSide
+        }),
+        cornFurrowM = new THREE.MeshStandardMaterial({
+          color: 0x6d5634,
+          roughness: 1,
+          side: THREE.DoubleSide
+        }),
+        cornStalkM = mt(0x6d982e),
         cornLeafM = new THREE.MeshStandardMaterial({
-          color: 0x6ea13d,
+          color: 0x91bd42,
           roughness: 0.75,
           side: THREE.DoubleSide
         }),
@@ -15016,13 +15769,15 @@
           { m: mt(0xd93848), r: 0.068, cluster: 3 }, // ลิ้นจี่จักรพรรดิ (ออกเป็นพวง)
           { m: mt(0xc9974c), r: 0.058, cluster: 4 }  // ลำไยสีทอง (ออกเป็นพวง)
         ];
+      fruitStyles.forEach(style => { style.m.flatShading = true; });
       orcLeafDark.flatShading = orcLeafMid.flatShading = orcLeafLight.flatShading = true;
 
       const cocoTrunkM = sm2(0x846c4c),
         cocoLeafM = new THREE.MeshStandardMaterial({
           color: 0x5c8f36,
           roughness: 0.7,
-          side: THREE.DoubleSide
+          side: THREE.DoubleSide,
+          flatShading: true
         }),
         cocoNutGreen = mt(0x6e9c3b),
         cocoNutBrown = mt(0x5c462e);
@@ -15083,7 +15838,8 @@
         return p;
       }
 
-      const _soilRingGeo = new THREE.RingGeometry(0.22, 0.72, 12);
+      const _soilRingGeo = new THREE.RingGeometry(0.22, 0.72, 12),
+        _orchardFruitGeo = new THREE.IcosahedronGeometry(1, 0);
       // ฟังก์ชันสร้างต้นไม้ผล (ลดจำนวนพุ่มใบและผลไม้เพื่อเพิ่ม FPS)
       function makeOrchardTree(styleIdx, sc) {
         const g = new THREE.Group();
@@ -15095,25 +15851,27 @@
         g.add(ring);
         
         cyl(0.16, 0.24, 0.28, orcTrunkM, 0, 0.14, 0, g);
-        cyl(0.11, 0.16, 1.15, orcTrunkM, 0, 0.72, 0, g);
-        for (let b = 0; b < 3; b++) { // ลดกิ่งหลักเหลือ 3
-          const ba = b * 2.09;
-          cyl(0.045, 0.08, 0.75, orcTrunkM, Math.cos(ba) * 0.24, 1.42, Math.sin(ba) * 0.24, g, Math.sin(ba) * 0.62, -Math.cos(ba) * 0.62);
+        cyl(0.11, 0.16, 1.65, orcTrunkM, 0, 0.88, 0, g);
+        for (let b = 0; b < 4; b++) {
+          const ba = (b / 4) * Math.PI * 2 + 0.24,
+            lean = 0.38 + (b % 2) * 0.08;
+          cyl(0.04, 0.07, 1.12, orcTrunkM, Math.cos(ba) * 0.3, 1.72, Math.sin(ba) * 0.3, g, Math.sin(ba) * lean, -Math.cos(ba) * lean);
         }
         
         const blobs = [
-          [0, 1.95, 0, 0.95, orcLeafMid],
-          [0.58, 1.75, 0.35, 0.72, orcLeafDark],
-          [-0.38, 1.8, 0.56, 0.68, orcLeafMid],
-            [0.25, 2.38, 0.18, 0.62, orcLeafLight],
-            [0.62, 1.52, -0.42, 0.58, orcLeafDark],
-            [-0.66, 1.55, -0.24, 0.55, orcLeafMid],
-            [0.02, 1.5, 0.68, 0.52, orcLeafLight]
-          ];
+          [0, 2.02, 0, 0.92, orcLeafMid],
+          [0.52, 2.12, 0.12, 0.76, orcLeafDark],
+          [-0.46, 2.22, 0.32, 0.78, orcLeafMid],
+          [0.2, 2.62, -0.38, 0.7, orcLeafLight],
+          [-0.18, 2.92, -0.12, 0.6, orcLeafDark],
+          [0.16, 3.28, 0.15, 0.5, orcLeafMid],
+          [0, 3.62, 0, 0.42, orcLeafLight]
+        ];
+        const crownLean = (LR() - 0.5) * 0.24;
         blobs.forEach(([bx, by, bz, br, bm], bi) => {
-          const m = new THREE.Mesh(leafGeo, bm);
-          m.position.set(bx, by, bz);
-          m.scale.set(br * 1.3, br * 0.48, br * 0.86);
+          const m = new THREE.Mesh(treeLeafGeo, bm);
+          m.position.set(bx + by * crownLean * 0.18, by, bz - by * crownLean * 0.12);
+          m.scale.set(br * 1.28, br * 0.88, br * 1.04);
           m.rotation.set((LR() - 0.5) * 0.18, LR() * Math.PI * 2, (LR() - 0.5) * 0.12);
           m.castShadow = bi === 0;
           g.add(m);
@@ -15124,98 +15882,17 @@
             const fx = bx + Math.cos(fa) * Math.cos(fe) * br * 0.92;
             const fy = by + Math.sin(fe) * br * 0.72;
             const fz = bz + Math.sin(fa) * Math.cos(fe) * br * 0.92;
-            ball(st.r, st.m, fx, fy, fz, g);
+            const fruit = new THREE.Mesh(_orchardFruitGeo, st.m);
+            fruit.position.set(fx, fy, fz);
+            fruit.scale.setScalar(st.r);
+            g.add(fruit);
           }
         });
         return g;
       }
 
       zoneIdx.push(crowd.length);
-      // ================= โซน 1: ทุ่งนาขั้นบันได & เถียงนา (t: 0.565 - 0.652) =================
-      let paddyCount = 0;
-      for (let t = 0.565; t < 0.652; t += 0.009) {
-        for (const sd of [-1, 1]) {
-          for (let tier = 0; tier < 2; tier++) {
-            const off = sd * (12.8 + tier * 10.2),
-              o = offRoad(t, off);
-            if (!spotOK(o.x, o.z, 6.4)) continue;
-            taken.push([o.x, o.z, 5.8]);
-            paddyCount++;
-
-            const estate = new THREE.Group();
-            estate.position.set(o.x, 0, o.z);
-            estate.rotation.y = Math.atan2(o.tn.x, o.tn.z);
-            scene.add(estate);
-
-            // แผ่นดินโคลนรองรับแปลงนาคู่ (เชื่อม 2 แปลงติดกันเป็นผืนเดียว)
-            box(13.4, 0.05, 9.4, paddyBaseM, 0, 0.02, 0, estate);
-            const isRipe = (paddyCount + tier) % 3 === 0;
-            for (const subX of [-3.25, 3.25]) {
-              const subG = new THREE.Group();
-              subG.position.set(subX, 0, 0);
-              estate.add(subG);
-              PADS.push([subG, isRipe]);
-            }
-
-            // เพิ่มเถียงนาไม้ไผ่และกองฟางริมคันนาสำหรับแปลงแถวหน้า
-            if (tier === 0 && paddyCount % 2 === 0) {
-              const hut = new THREE.Group();
-              hut.position.set(-sd * 5.2, 0, -3.6);
-              estate.add(hut);
-              for (const hx of [-0.75, 0.75])
-                for (const hz of [-0.65, 0.65]) cyl(0.05, 0.06, 1.55, bambooM, hx, 0.77, hz, hut);
-              box(1.7, 0.08, 1.5, bambooM, 0, 0.62, 0, hut);
-              box(1.55, 0.04, 1.35, strawGoldM, 0, 0.67, 0, hut);
-              const roof = new THREE.Mesh(new THREE.ConeGeometry(1.45, 0.85, 4), thatchRoofM);
-              roof.position.y = 1.88;
-              roof.rotation.y = Math.PI / 4;
-              roof.castShadow = true;
-              hut.add(roof);
-              // กองฟางสีทองริมคันนา
-              for (let s = 0; s < 2; s++) {
-                const stack = new THREE.Group();
-                stack.position.set(sd * (4.8 - s * 1.15), 0, 3.4);
-                estate.add(stack);
-                cyl(0.45, 0.55, 0.65, strawGoldM, 0, 0.32, 0, stack);
-                const topCone = new THREE.Mesh(new THREE.ConeGeometry(0.48, 0.55, 10), strawGoldM);
-                topCone.position.y = 0.9;
-                topCone.castShadow = true;
-                stack.add(topCone);
-              }
-            }
-
-            // ชาวนาก้มดำนาอยู่ในแปลงนาจริงๆ + หุ่นไล่การิมคันนา
-            if (tier === 0 && paddyCount % 2 === 1) {
-              addP(
-                {
-                  sk: pk(SK),
-                  top: pk([0x2f4a6b, 0x3d6a8a]),
-                  bt: 0x2f3d38,
-                  short: 1,
-                  hair: pk(HC),
-                  hs: 0,
-                  hat: 'straw',
-                  long: 1,
-                  v: 0,
-                  k: 1
-                },
-                'work',
-                o.x - sd * o.tn.z * 3.25,
-                o.z + sd * o.tn.x * 3.25,
-                0,
-                0
-              );
-              if (paddyCount % 3 === 1) {
-                const sc = makeScarecrow(0.95 + LR() * 0.12);
-                sc.position.set(-sd * 3.25, 0, (LR() - 0.5) * 2.2);
-                sc.rotation.y = (LR() - 0.5) * 1.4;
-                estate.add(sc);
-              }
-            }
-          }
-        }
-      }
-
+      // โซนเกษตรริมทางเดิมถูกรวมเป็นทุ่งผืนใหญ่ด้านนอกหนองน้ำ
       zoneIdx.push(crowd.length);
       // ================= โซน 2: แปลงฟักทองและไร่ข้าวโพดแยกเป็นคนละช่วง =================
       // วัสดุฟักทองแบบผิวเรียบนุ่ม (ไม่ใช้ flatShading) เพื่อให้พูฟักทองดูโค้งมนสมจริง
@@ -15300,7 +15977,7 @@
         return pg;
       };
       let cornPlotCount = 0;
-      for (let t = 0.658; t < 0.752; t += 0.008) {
+      for (let t = 0.658; t < 0.69; t += 0.008) {
         if (window.__TEMPLES && window.__TEMPLES.some(tp => Math.abs(t - tp.t) < 0.016)) continue;
         for (const sd of [-1, 1]) {
           for (let tier = 0; tier < 2; tier++) {
@@ -15455,6 +16132,190 @@
             }
           }
         }
+      }
+
+      {
+        const rowCount = Math.floor(CORN_FIELD_DEPTH / CORN_ROW_SPACING),
+          fieldLength = route.getLength() * (CORN_FIELD_T1 - CORN_FIELD_T0),
+          groundPositions = [],
+          groundUvs = [],
+          groundColors = [],
+          groundIndices = [],
+          groundBands = [0, 1.2, CORN_FIELD_DEPTH - 1.2, CORN_FIELD_DEPTH],
+          rowPositions = [],
+          rowIndices = [],
+          field = new THREE.Group(),
+          rowHalfWidth = 0.18,
+          grassTint = new THREE.Color(0xffffff),
+          soilTint = new THREE.Color(0x95834a),
+          sampleRow = (t, row, progress) => {
+            const point = cornFieldPoint(t, CORN_ROW_SPACING * (row + 0.5)),
+              drift = Math.sin(progress * Math.PI) * 0.55 + Math.sin(progress * Math.PI * 2 + row * 0.4) * 0.12;
+            return {
+              x: point.x + point.tangent.x * drift,
+              z: point.z + point.tangent.z * drift,
+              nx: point.nx,
+              nz: point.nz,
+              tangent: point.tangent
+            };
+          },
+          cornCylGeometry = (topRadius, bottomRadius, height) => {
+            const key = topRadius.toFixed(3) + '_' + bottomRadius.toFixed(3) + '_' + height.toFixed(3);
+            return _cylCache[key] || (_cylCache[key] = new THREE.CylinderGeometry(topRadius, bottomRadius, height, 6));
+          },
+          cornBatches = {
+            stalk: { name: 'corn-stalks', geometry: cornCylGeometry(0.026, 0.046, 1.75), material: cornStalkM, matrices: [] },
+            tassel: { name: 'corn-tassels', geometry: cornCylGeometry(0.008, 0.015, 0.28), material: cornTasselM, matrices: [] },
+            leaf: { name: 'corn-leaves', geometry: cornBladeGeo, material: cornLeafM, matrices: [] },
+            husk: { name: 'corn-husks', geometry: cornCylGeometry(0.046, 0.054, 0.16), material: cornHuskM, matrices: [] },
+            kernel: { name: 'corn-kernels', geometry: cornCylGeometry(0.032, 0.044, 0.22), material: cornKernelM, matrices: [] },
+            kernelTip: { name: 'corn-kernel-tips', geometry: SPH, material: cornKernelM, matrices: [] },
+            silk: { name: 'corn-silks', geometry: cornCylGeometry(0.018, 0.006, 0.07), material: cornSilkM, matrices: [] }
+          },
+          cornPlantPosition = new THREE.Vector3(),
+          cornPlantQuaternion = new THREE.Quaternion(),
+          cornPlantScale = new THREE.Vector3(),
+          cornPlantMatrix = new THREE.Matrix4(),
+          cornPartPosition = new THREE.Vector3(),
+          cornPartEuler = new THREE.Euler(),
+          cornPartQuaternion = new THREE.Quaternion(),
+          cornPartScale = new THREE.Vector3(),
+          cornPartMatrix = new THREE.Matrix4(),
+          cornEarMatrix = new THREE.Matrix4(),
+          cornUp = new THREE.Vector3(0, 1, 0),
+          addCornPart = (batch, parentMatrix, x, y, z, rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1) => {
+            cornPartPosition.set(x, y, z);
+            cornPartEuler.set(rx, ry, rz);
+            cornPartQuaternion.setFromEuler(cornPartEuler);
+            cornPartScale.set(sx, sy, sz);
+            cornPartMatrix.compose(cornPartPosition, cornPartQuaternion, cornPartScale);
+            batch.matrices.push(new THREE.Matrix4().multiplyMatrices(parentMatrix, cornPartMatrix));
+          };
+        field.name = 'roadside-corn-field';
+        field.position.y = -0.12;
+        field.userData.bigRange = true;
+        field.userData.cullCenter = route.getPoint((CORN_FIELD_T0 + CORN_FIELD_T1) * 0.5);
+        for (let row = 0; row < rowCount; row++) {
+          const rowProgress = (row + 0.5) / rowCount,
+            endTaper = Math.abs(rowProgress * 2 - 1),
+            rowStart = cornFieldRowStart(row),
+            startProgress = rowStart === null ? 1 : Math.max(rowStart, 0.04 + endTaper * 0.08),
+            endProgress = 0.96 - endTaper * 0.08,
+            pathSamples = Math.max(12, Math.ceil((fieldLength * (endProgress - startProgress)) / 3)),
+            rowOffset = rowPositions.length / 3;
+          if (rowStart === null || startProgress >= endProgress) continue;
+          for (let sample = 0; sample <= pathSamples; sample++) {
+            const progress = startProgress + ((endProgress - startProgress) * sample) / pathSamples,
+              t = CORN_FIELD_T0 + (CORN_FIELD_T1 - CORN_FIELD_T0) * progress,
+              point = sampleRow(t, row, progress);
+            rowPositions.push(
+              point.x + point.nx * rowHalfWidth,
+              0.012,
+              point.z + point.nz * rowHalfWidth,
+              point.x - point.nx * rowHalfWidth,
+              0.012,
+              point.z - point.nz * rowHalfWidth
+            );
+            if (sample < pathSamples) {
+              const a = rowOffset + sample * 2;
+              rowIndices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+            }
+          }
+          const plantCount = Math.max(
+              3,
+              Math.floor((fieldLength * (endProgress - startProgress)) / 2.6)
+            );
+          for (let plantIndex = 0; plantIndex < plantCount; plantIndex++) {
+            const progress =
+                startProgress + ((endProgress - startProgress) * (plantIndex + 0.5)) / plantCount,
+              t = CORN_FIELD_T0 + (CORN_FIELD_T1 - CORN_FIELD_T0) * progress,
+              point = sampleRow(t, row, progress),
+              alongJitter = (LR() - 0.5) * 0.22,
+              acrossJitter = (LR() - 0.5) * 0.18,
+              plantScale = 1.55 + LR() * 0.2,
+              leafYaws = [0, 1, 2].map(l => l * 2.15 + (LR() - 0.5) * 0.25),
+              hasEar = LR() > 0.5,
+              plantYaw = Math.atan2(point.tangent.x, point.tangent.z) + (LR() - 0.5) * 0.42;
+            cornPlantPosition.set(
+              point.x + point.tangent.x * alongJitter + point.nx * acrossJitter,
+              0.035,
+              point.z + point.tangent.z * alongJitter + point.nz * acrossJitter
+            );
+            cornPlantQuaternion.setFromAxisAngle(cornUp, plantYaw);
+            cornPlantScale.setScalar(plantScale);
+            cornPlantMatrix.compose(cornPlantPosition, cornPlantQuaternion, cornPlantScale);
+            addCornPart(cornBatches.stalk, cornPlantMatrix, 0, 0.875, 0);
+            addCornPart(cornBatches.tassel, cornPlantMatrix, 0, 1.86, 0);
+            for (let leaf = 0; leaf < leafYaws.length; leaf++)
+              addCornPart(cornBatches.leaf, cornPlantMatrix, 0, 0.4 + leaf * 0.45, 0, 0, leafYaws[leaf], 0);
+            if (hasEar) {
+              cornPartPosition.set(0.04, 0.98, 0);
+              cornPartEuler.set(0, 0, -0.52);
+              cornPartQuaternion.setFromEuler(cornPartEuler);
+              cornPartScale.set(1, 1, 1);
+              cornPartMatrix.compose(cornPartPosition, cornPartQuaternion, cornPartScale);
+              cornEarMatrix.multiplyMatrices(cornPlantMatrix, cornPartMatrix);
+              addCornPart(cornBatches.husk, cornEarMatrix, 0, 0.07, 0);
+              addCornPart(cornBatches.kernel, cornEarMatrix, 0, 0.14, 0);
+              addCornPart(cornBatches.kernelTip, cornEarMatrix, 0, 0.25, 0, 0, 0, 0, 0.032, 0.032, 0.032);
+              addCornPart(cornBatches.silk, cornEarMatrix, 0, 0.29, 0);
+            }
+          }
+        }
+        for (const batch of Object.values(cornBatches)) {
+          if (!batch.matrices.length) continue;
+          const instanced = new THREE.InstancedMesh(batch.geometry, batch.material, batch.matrices.length);
+          instanced.name = batch.name;
+          instanced.castShadow = false;
+          instanced.receiveShadow = false;
+          for (let i = 0; i < batch.matrices.length; i++) instanced.setMatrixAt(i, batch.matrices[i]);
+          instanced.instanceMatrix.needsUpdate = true;
+          instanced.computeBoundingSphere();
+          field.add(instanced);
+        }
+        const groundSamples = Math.max(16, Math.ceil(fieldLength / 3));
+        for (let sample = 0; sample <= groundSamples; sample++) {
+          const progress = 0.04 + (0.92 * sample) / groundSamples,
+            t = CORN_FIELD_T0 + (CORN_FIELD_T1 - CORN_FIELD_T0) * progress,
+            endDistance = Math.min((progress - 0.04) * fieldLength, (0.96 - progress) * fieldLength),
+            endBlend = Math.max(0, Math.min(1, endDistance / 4)),
+            fade = endBlend * endBlend * (3 - 2 * endBlend);
+          for (let band = 0; band < groundBands.length; band++) {
+            const point = cornFieldPoint(t, groundBands[band]),
+              sideBlend = band === 0 || band === groundBands.length - 1 ? 0 : 1,
+              blend = sideBlend * fade,
+              tint = grassTint.clone().lerp(soilTint, blend);
+            groundPositions.push(point.x, 0.008, point.z);
+            groundUvs.push((point.x + 1200) / 2400, (1200 - point.z) / 2400);
+            groundColors.push(tint.r, tint.g, tint.b);
+          }
+          if (sample < groundSamples) {
+            const a = sample * groundBands.length;
+            for (let band = 0; band < groundBands.length - 1; band++) {
+              const edge = a + band,
+                next = edge + groundBands.length;
+              groundIndices.push(edge, next, edge + 1, edge + 1, next, next + 1);
+            }
+          }
+        }
+        const groundGeometry = new THREE.BufferGeometry();
+        groundGeometry.setAttribute('position', new THREE.Float32BufferAttribute(groundPositions, 3));
+        groundGeometry.setAttribute('uv', new THREE.Float32BufferAttribute(groundUvs, 2));
+        groundGeometry.setAttribute('color', new THREE.Float32BufferAttribute(groundColors, 3));
+        groundGeometry.setIndex(groundIndices);
+        groundGeometry.computeVertexNormals();
+        const fieldGround = new THREE.Mesh(groundGeometry, cornFieldGroundM);
+        fieldGround.name = 'corn-field-ground';
+        field.add(fieldGround);
+
+        const soilGeometry = new THREE.BufferGeometry();
+        soilGeometry.setAttribute('position', new THREE.Float32BufferAttribute(rowPositions, 3));
+        soilGeometry.setIndex(rowIndices);
+        soilGeometry.computeVertexNormals();
+        const soilRows = new THREE.Mesh(soilGeometry, cornFurrowM);
+        soilRows.name = 'flat-corn-furrows';
+        field.add(soilRows);
+        scene.add(field);
       }
 
       // สุ่มวางร้านข้าวโพดปิ้ง-ข้าวโพดต้มริมทาง (1-2 ร้าน) แถวโซนไร่ข้าวโพด พร้อมเตาถ่าน ฝักข้าวโพดปิ้งหอมๆ หม้อต้ม และแม่ค้า/ลูกค้า
@@ -15936,12 +16797,14 @@
           wg.computeVertexNormals();
           wg.computeBoundingSphere();
 
-          const wMat = new THREE.MeshBasicMaterial({
+          const wMat = new THREE.MeshStandardMaterial({
             vertexColors: true,
             side: THREE.DoubleSide,
             fog: true,
             transparent: true,
             opacity: 0.9,
+            roughness: 0.34,
+            metalness: 0.03,
             depthWrite: true,
             polygonOffset: true,
             polygonOffsetFactor: -4,
@@ -16304,29 +17167,50 @@
             if (sz < 0) gable.rotation.y = Math.PI;
             riversideHouse.add(gable);
           }
+          const roofHalfSpan = 3.1,
+            roofRidgeY = 9.22,
+            roofEaveY = 5.85,
+            roofPitch = Math.atan2(roofRidgeY - roofEaveY, roofHalfSpan),
+            roofSlopeLength = Math.hypot(roofHalfSpan, roofRidgeY - roofEaveY),
+            roofCenterY = (roofRidgeY + roofEaveY) * 0.5,
+            roofCenterX = roofHalfSpan * 0.5,
+            roofDepth = 6.2;
           for (const sx of [-1, 1]) {
-            const roofSide = box(3.15, 0.18, 6.05, roofM, sx * 1.43, 8.55, 0.05, riversideHouse);
-            roofSide.rotation.z = sx * -0.48;
+            const roofAngle = -sx * roofPitch,
+              roofSide = box(
+                roofSlopeLength + 0.12,
+                0.18,
+                roofDepth,
+                roofM,
+                sx * roofCenterX,
+                roofCenterY,
+                0.05,
+                riversideHouse
+              );
+            roofSide.rotation.z = roofAngle;
             for (let z = -2.85; z <= 2.86; z += 0.43) {
-              const rib = box(3.05, 0.055, 0.055, roofLightM, sx * 1.43, 8.66, z, riversideHouse);
-              rib.rotation.z = sx * -0.48;
+              const rib = box(
+                roofSlopeLength - 0.12,
+                0.055,
+                0.055,
+                roofLightM,
+                sx * roofCenterX,
+                roofCenterY + 0.075,
+                z,
+                riversideHouse
+              );
+              rib.rotation.z = roofAngle;
             }
-            for (let x = 0.35; x <= 2.65; x += 0.38) {
-              const xPos = sx * x,
-                yPos = 9.25 - x * 0.49;
-              box(0.035, 0.035, 6.12, x > 2.2 ? trimM : roofLightM, xPos, yPos, 0.05, riversideHouse);
+            for (let x = 0.35; x <= 2.85; x += 0.38) {
+              const y = roofRidgeY - ((roofRidgeY - roofEaveY) * x) / roofHalfSpan + 0.075;
+              box(0.035, 0.035, roofDepth + 0.1, x > 2.55 ? trimM : roofLightM, sx * x, y, 0.05, riversideHouse);
             }
-            for (const z of [-2.95, 3.05]) {
-              rodTo(sx * 0.08, 9.28, z, sx * 2.95, 7.83, z, 0.075, 0.085, trimM, riversideHouse);
+            for (const z of [-3.05, 3.15]) {
+              rodTo(sx * 0.05, roofRidgeY, z, sx * roofHalfSpan, roofEaveY, z, 0.075, 0.085, trimM, riversideHouse);
             }
+            box(0.14, 0.16, roofDepth + 0.1, trimM, sx * roofHalfSpan, roofEaveY, 0.05, riversideHouse);
           }
-          box(0.18, 0.19, 6.2, trimM, 0, 9.22, 0.05, riversideHouse);
-          for (const sz of [-2.0, 2.0]) {
-            const cross = box(0.07, 0.9, 0.08, trimM, 0, 9.23, sz, riversideHouse);
-            cross.rotation.z = Math.PI / 4;
-            const other = box(0.07, 0.9, 0.08, trimM, 0, 9.23, sz, riversideHouse);
-            other.rotation.z = -Math.PI / 4;
-          }
+          box(0.18, 0.19, roofDepth + 0.1, trimM, 0, roofRidgeY, 0.05, riversideHouse);
 
           // Multi-pane windows, shutters, upper balcony and striped porch awnings.
           const addWindow = (x, y, z, width) => {
@@ -18429,12 +19313,22 @@
         pGround.position.y = 0.025;
         g.add(pGround);
 
-        // ขอนไม้โค้งกั้นขอบรอบสนามเด็กเล่น (แบ่งเป็นท่อนๆ กั้นขอบธรรมชาติ)
-        for (let b = 0; b < 8; b++) {
-          const bAng = (b / 8) * Math.PI * 2 + 0.15;
-          const bx = Math.cos(bAng) * 3.45, bz = Math.sin(bAng) * 3.45;
-          const bLog = cyl(0.07, 0.07, 2.35, playDkW, bx, 0.055, bz, g);
-          bLog.rotation.set(Math.PI / 2, 0, -bAng);
+        // ขอนไม้กั้นขอบ 8 ด้าน วางแนวสัมผัสวงสนามให้ปลายต่อกันพอดี
+        const logSides = 8,
+          logRadius = 3.45,
+          logStep = (Math.PI * 2) / logSides,
+          logLength = 2 * logRadius * Math.sin(Math.PI / logSides) + 0.08,
+          logUp = new THREE.Vector3(0, 1, 0);
+        for (let b = 0; b < logSides; b++) {
+          const bAng = (b + 0.5) * logStep + 0.15,
+            edgeRadius = logRadius * Math.cos(Math.PI / logSides),
+            bx = Math.cos(bAng) * edgeRadius,
+            bz = Math.sin(bAng) * edgeRadius,
+            bLog = cyl(0.07, 0.07, logLength, playDkW, bx, 0.055, bz, g);
+          bLog.quaternion.setFromUnitVectors(
+            logUp,
+            new THREE.Vector3(-Math.sin(bAng), 0, Math.cos(bAng))
+          );
         }
 
         // ฟังก์ชันสร้างเด็ก โดยคำนวณพิกัด Local -> World ตามองศาของเครื่องเล่น
@@ -18529,41 +19423,42 @@
           }
 
           // เด็กๆ เล่นรอบหอคอย
-          addKid(0.0, 0.25, 0, 'talk');             // เด็กยืนบนหอคอยเตรียมสไลด์ลง
+          addKid(-1.0, -0.62, 0, 'talk');           // เด็กรอขึ้นบันไดด้านข้างหอคอย
           addKid(0.4, 2.7, Math.PI, 'talk');        // เด็กรอรับที่ปลายสไลเดอร์
         } else if (type === 1) {
           // ==========================================
           // 2. ชิงช้าคู่โครงเหล็ก A-Frame (Double A-Frame Swing Set)
           // ==========================================
           // โครงขา A-Frame ซ้าย (x = -1.65)
-          cyl(0.045, 0.045, 2.45, playBlue, -1.65, 1.15, -0.65, g, -0.28);
-          cyl(0.045, 0.045, 2.45, playBlue, -1.65, 1.15, 0.65, g, 0.28);
-          cyl(0.03, 0.03, 0.82, playBlue, -1.65, 0.88, 0, g, Math.PI / 2); // คานขวางขา A
+          cyl(0.045, 0.045, 2.45, playBlue, -1.65, 1.15, -0.65, g, 0.28);
+          cyl(0.045, 0.045, 2.45, playBlue, -1.65, 1.15, 0.65, g, -0.28);
+          cyl(0.03, 0.03, 1.48, playBlue, -1.65, 0.88, 0, g, Math.PI / 2); // คานขวางขา A
 
           // โครงขา A-Frame ขวา (x = 1.65)
-          cyl(0.045, 0.045, 2.45, playBlue, 1.65, 1.15, -0.65, g, -0.28);
-          cyl(0.045, 0.045, 2.45, playBlue, 1.65, 1.15, 0.65, g, 0.28);
-          cyl(0.03, 0.03, 0.82, playBlue, 1.65, 0.88, 0, g, Math.PI / 2); // คานขวางขา A
+          cyl(0.045, 0.045, 2.45, playBlue, 1.65, 1.15, -0.65, g, 0.28);
+          cyl(0.045, 0.045, 2.45, playBlue, 1.65, 1.15, 0.65, g, -0.28);
+          cyl(0.03, 0.03, 1.48, playBlue, 1.65, 0.88, 0, g, Math.PI / 2); // คานขวางขา A
 
           // คานเหล็กด้านบน (Top Crossbeam)
           const topBeam = cyl(0.05, 0.05, 3.75, playYellow, 0, 2.26, 0, g);
           topBeam.rotation.z = Math.PI / 2;
 
           // ช่องชิงช้าที่ 1 (ซ้าย: ชิงช้าแผ่นไม้มาตรฐาน)
-          cyl(0.012, 0.012, 1.55, playI, -0.98, 1.42, 0, g);
-          cyl(0.012, 0.012, 1.55, playI, -0.58, 1.42, 0, g);
+          cyl(0.012, 0.012, 1.6, playI, -0.98, 1.44, 0, g);
+          cyl(0.012, 0.012, 1.6, playI, -0.58, 1.44, 0, g);
           box(0.48, 0.04, 0.2, playRed, -0.78, 0.64, 0, g); // แผ่นที่นั่ง
 
           // ช่องชิงช้าที่ 2 (ขวา: ชิงช้ายางรถยนต์แขวนโซ่ 3 เส้น)
-          cyl(0.012, 0.012, 1.48, playI, 0.78, 1.46, 0, g);
+          cyl(0.012, 0.012, 1.18, playI, 0.62, 1.64, 0, g);
+          cyl(0.012, 0.012, 1.14, playI, 0.78, 1.66, 0, g);
+          cyl(0.012, 0.012, 1.18, playI, 0.94, 1.64, 0, g);
           const tireSwing = new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.09, 8, 18), playT);
           tireSwing.position.set(0.78, 0.68, 0);
-          tireSwing.rotation.x = Math.PI / 2;
           g.add(tireSwing);
 
-          // เด็กเล่นชิงช้า
-          addKid(-0.78, 0.08, 0, 'talk');
-          addKid(0.78, 0.12, 0, 'talk');
+          // เด็กยืนรอเล่น โดยไม่ซ้อนกับที่นั่งและโครงชิงช้า
+          addKid(-2.2, 0.7, 0, 'talk');
+          addKid(2.2, 0.7, 0, 'talk');
         } else if (type === 2) {
           // ==========================================
           // 3. กระบะทรายไม้ทรงสี่เหลี่ยมพร้อมของเล่นและปราสาททราย (Timber Sandbox)
@@ -18635,9 +19530,9 @@
             bR.rotation.x = Math.PI / 2;
           });
 
-          // เด็กเล่นม้ากระดก
-          addKid(-1.18, -0.6, Math.PI / 2, 'talk');
-          addKid(1.18, -0.6, -Math.PI / 2, 'talk');
+          // เด็กยืนรอเล่นโดยไม่ซ้อนกับปลายคาน
+          addKid(-1.55, -1.25, Math.PI / 2, 'talk');
+          addKid(1.55, 1.25, -Math.PI / 2, 'talk');
         } else if (type === 4) {
           // ==========================================
           // 5. ทางเดินทรงตัวยางรถยนต์หลากสี พร้อมม้านั่งผู้ปกครองและถังขยะ (Tire Stepping Course & Bench)
@@ -18671,9 +19566,9 @@
           cyl(0.18, 0.16, 0.6, playGreen, 1.8, 0.3, 1.45, g);
           cyl(0.2, 0.2, 0.06, playI, 1.8, 0.62, 1.45, g); // ฝาถัง
 
-          // เด็กทรงตัวบนยาง และเด็กนั่งพัก
-          addKid(0.0, -0.05, 0, 'talk');
-          addKid(-0.35, 1.4, Math.PI, 'talk'); // นั่งพักบนม้านั่ง
+          // เด็กยืนข้างทางเดินยาง และม้านั่งโดยไม่ซ้อนกับอุปกรณ์
+          addKid(2.15, -0.05, 0, 'talk');
+          addKid(-1.8, 1.4, Math.PI, 'talk');
         }
       }
       /* --- จบโค้ด: สนามเด็กเล่น --- */
@@ -19114,6 +20009,28 @@
             h.hd.rotation.y =
               d2 < 85 ? cl(Math.sin(Math.atan2(-dx, -dz) - h.g.rotation.y), -0.45, 0.45) : -s * 0.04;
             h.hd.rotation.x = Math.cos(h.ph * 2) * (h.run ? 0.032 : 0.018);
+          } else if (h.mode === 'swim') {
+            const motion = state.reduced ? 0 : 1,
+              swimPhase = tt * 2.8 + h.ph,
+              stroke = Math.sin(swimPhase);
+            h.g.position.y = 0.14 + Math.sin(swimPhase * 0.7) * 0.025 * motion;
+            h.pel.position.set(0, 0.03, 0);
+            h.pel.rotation.set(-Math.PI / 2 + stroke * 0.035 * motion, 0, 0);
+            h.tor.rotation.set(Math.sin(swimPhase * 0.5) * 0.045 * motion, stroke * 0.035 * motion, 0);
+            h.legs[0].h.rotation.x = stroke * 0.3;
+            h.legs[1].h.rotation.x = -stroke * 0.3;
+            h.legs[0].k.rotation.x = 0.32 + Math.max(0, stroke) * 0.25;
+            h.legs[1].k.rotation.x = 0.32 + Math.max(0, -stroke) * 0.25;
+            h.arms[0].sh.rotation.set(-0.15 + stroke * 0.12 * motion, 0, 1.05 + stroke * 0.16 * motion);
+            h.arms[1].sh.rotation.set(-0.15 - stroke * 0.12 * motion, 0, -1.05 - stroke * 0.16 * motion);
+            h.arms[0].el.rotation.x = -0.62 - Math.max(0, -stroke) * 0.22 * motion;
+            h.arms[1].el.rotation.x = -0.62 - Math.max(0, stroke) * 0.22 * motion;
+            h.hd.rotation.set(0.03, Math.sin(swimPhase * 0.35) * 0.08 * motion, 0);
+            if (h.swimRing) {
+              const phase = (tt * 0.42 + h.ph) % 1;
+              h.swimRing.scale.setScalar(0.85 + phase * 0.5);
+              h.swimRing.material.opacity = 0.12 + (1 - phase) * 0.26;
+            }
           } else if (h.mode === 'sit_monk') {
             // ท่าพระสงฆ์นั่งขัดสมาธิบนอาสนะ พนมมือเจริญพระพุทธมนต์/ให้พร
             const motion = state.reduced ? 0 : 1,
@@ -19658,16 +20575,6 @@
           ekd: 1.2,
           e0: new THREE.Color(0xc9a63f),
           e1: new THREE.Color(0xf0d97a)
-        }),
-        gStub = vGrassGeo(vMkR(47), {
-          n: 5,
-          sp: 0.25,
-          h0: 0.6,
-          w: 0.08,
-          lean: 0.3,
-          S: 1,
-          c0: new THREE.Color(0x6a5936),
-          c1: new THREE.Color(0xb09a5e)
         });
       const FT = [
         {
@@ -19941,101 +20848,221 @@
 
       /* ============================================================================
        * scene/40-veg/04-rice-fields.js
-       * ต้นข้าวในทุ่งนาใกล้ถนน และนาแปลงเล็กริมทาง (น้ำขัง คันนา กอข้าว)
+       * แนวต้นข้าวในทุ่งนาผืนใหญ่ข้างหนองน้ำ
        * (ไฟล์นี้ถูกต่อรวมเป็น closure เดียวกับไฟล์อื่น — ไม่ต้อง import/export · ลำดับไฟล์ดู scripts/build-app.js)
        * ========================================================================== */
 
-      /* ทุ่งนาใกล้ถนน: ต้นข้าวเป็นแถว (เฉพาะแปลงที่อยู่ในระยะสายตา) */
+      /* กอข้าวเป็นแนวต่อเนื่องภายในทุ่งนาผืนใหญ่ */
       {
-        const GR = new Set([0x8fbf5a, 0x7fb04f, 0xa9c95a, 0x6fa86a, 0xb7c75a]),
-          GO = new Set([0xd9c25a, 0xc9a95a]);
-        const vcells = FIELDS.map(q => {
-          let m = 1e9;
-          for (let i = 0; i < routePts.length; i += 24) {
-            const dx = routePts[i] - q[0],
-              dz = routePts[i + 1] - q[1];
-            m = Math.min(m, dx * dx + dz * dz);
-          }
-          return { q, d: m };
-        })
-          .filter(o => o.d < 42 * 42)
-          .sort((a, b) => a.d - b.d)
-          .slice(0, 48);
-        MAP_RICE_FIELDS.push(...vcells.map(({ q }) => q));
-        for (const { q } of vcells) {
-          const kind = GR.has(q.c) ? 'g' : GO.has(q.c) ? 'r' : q.c === 0x9c8456 ? 's' : 'w',
-            sp = { g: 1.5, r: 1.5, s: 1.3, w: 2 }[kind],
-            half = 7.2,
-            arr = [],
-            tc = new THREE.Color(q.c).lerp(vWhite, 0.6);
-          for (let x = -half; x <= half; x += sp)
-            for (let z = -half; z <= half; z += sp) {
-              const h = {
-                  g: 0.55 + vrn() * 0.2,
-                  r: 0.78 + vrn() * 0.2,
-                  s: 0.13 + vrn() * 0.06,
-                  w: 0.2 + vrn() * 0.08
-                }[kind],
-                sw = kind === 's' ? h * 3.4 : h * 1.9;
-              arr.push({
-                x: q[0] + x + (vrn() - 0.5) * sp * 0.4,
-                y: 0.02,
-                z: q[1] + z + (vrn() - 0.5) * sp * 0.4,
-                ry: vrn() * 6.28,
-                rx: (vrn() - 0.5) * 0.1,
-                rz: (vrn() - 0.5) * 0.1,
-                sx: sw,
-                sy: h,
-                sz: sw,
-                c: tc.clone().multiplyScalar(0.9 + vrn() * 0.2)
-              });
+        const waterCells = FIELDS.filter(q => q.water),
+          waterPatchPositions = [],
+          waterPatchIndices = [],
+          waterShorePositions = [],
+          waterShoreColors = [],
+          waterShoreIndices = [],
+          waterShoreColor = new THREE.Color(),
+          waterEdgeSamples = 24;
+        waterCells.forEach((q, patchIndex) => {
+          const waterStart = waterPatchPositions.length / 3,
+            shoreStart = waterShorePositions.length / 3,
+            yaw = q.yaw || 0,
+            cos = Math.cos(yaw),
+            sin = Math.sin(yaw),
+            phase = patchIndex * 1.73,
+            innerX = RICE_FIELD_LANE_SPACING * 0.5 - 2,
+            innerZ = 3.9;
+          waterPatchPositions.push(q[0], 0.024, q[1]);
+          for (let i = 0; i < waterEdgeSamples; i++) {
+            const angle = (i / waterEdgeSamples) * Math.PI * 2,
+              ripple = 1 + Math.sin(angle * 3 + phase) * 0.085 + Math.cos(angle * 5 - phase) * 0.045,
+              localX = Math.cos(angle) * innerX * ripple,
+              localZ = Math.sin(angle) * innerZ * ripple,
+              x = q[0] + localX * cos + localZ * sin,
+              z = q[1] - localX * sin + localZ * cos;
+            waterPatchPositions.push(x, 0.024, z);
+            waterPatchIndices.push(
+              waterStart,
+              waterStart + 1 + i,
+              waterStart + 1 + ((i + 1) % waterEdgeSamples)
+            );
+            for (const shoreScale of [1, 1.2]) {
+              const shoreX = q[0] + localX * shoreScale * cos + localZ * shoreScale * sin,
+                shoreZ = q[1] - localX * shoreScale * sin + localZ * shoreScale * cos,
+                shoreHeight = shoreScale === 1 ? 0.022 : 0.014,
+                shoreHex = shoreScale === 1 ? 0x6d8056 : 0x829365;
+              waterShorePositions.push(shoreX, shoreHeight, shoreZ);
+              waterShoreColor.setHex(shoreHex).multiplyScalar(0.94 + Math.sin(angle * 7 + phase) * 0.05);
+              waterShoreColors.push(waterShoreColor.r, waterShoreColor.g, waterShoreColor.b);
             }
-          const m = vMesh(kind === 'r' ? gRiceR : kind === 's' ? gStub : gRiceG, vMG, arr, true);
+            if (i > 0) {
+              const previous = shoreStart + (i - 1) * 2,
+                current = shoreStart + i * 2;
+              waterShoreIndices.push(previous, current, previous + 1, previous + 1, current, current + 1);
+            }
+          }
+          const firstShore = shoreStart,
+            lastShore = shoreStart + (waterEdgeSamples - 1) * 2;
+          waterShoreIndices.push(
+            lastShore,
+            firstShore,
+            lastShore + 1,
+            lastShore + 1,
+            firstShore,
+            firstShore + 1
+          );
+        });
+        if (waterCells.length) {
+          const waterPatchGeometry = new THREE.BufferGeometry(),
+            waterPatches = new THREE.Mesh(
+              waterPatchGeometry,
+              new THREE.MeshStandardMaterial({
+                color: 0x4b9696,
+                roughness: 0.2,
+                metalness: 0.12,
+                side: THREE.DoubleSide
+              })
+            ),
+            waterShoreGeometry = new THREE.BufferGeometry(),
+            waterShores = new THREE.Mesh(
+              waterShoreGeometry,
+              new THREE.MeshStandardMaterial({
+                vertexColors: true,
+                roughness: 1,
+                side: THREE.DoubleSide
+              })
+            );
+          waterPatchGeometry.setAttribute('position', new THREE.Float32BufferAttribute(waterPatchPositions, 3));
+          waterPatchGeometry.setIndex(waterPatchIndices);
+          waterPatchGeometry.computeVertexNormals();
+          waterShoreGeometry.setAttribute('position', new THREE.Float32BufferAttribute(waterShorePositions, 3));
+          waterShoreGeometry.setAttribute('color', new THREE.Float32BufferAttribute(waterShoreColors, 3));
+          waterShoreGeometry.setIndex(waterShoreIndices);
+          waterShoreGeometry.computeVertexNormals();
+          waterPatches.name = 'rice-water-patches';
+          waterShores.name = 'rice-water-soft-shores';
+          waterPatches.receiveShadow = true;
+          scene.add(waterShores, waterPatches);
+        }
+        const cropGroups = new Map(),
+          cropAcrossSpacing = 1.8,
+          cropAlongSpacing = 1.65,
+          cropBundClearance = 0.95,
+          riceNormalAt = (q, side) => {
+            const nx = q.x - q.px,
+              nz = q.z - q.pz,
+              length = Math.hypot(nx, nz) || 1;
+            return { x: (nx / length) * side, z: (nz / length) * side };
+          };
+        for (const riceSide of RICE_FIELD_SIDES) {
+          const side = riceSide.side,
+            lastStation = WETLAND_PTS.length - 1,
+            crossBundRows = [];
+          for (
+            let row = RICE_FIELD_STATION_STEP;
+            row < WETLAND_PTS.length - 4;
+            row += RICE_FIELD_STATION_STEP
+          )
+            crossBundRows.push(row);
+          for (let station = 0; station < lastStation; station++) {
+            const edge0 = riceSide.inner[station],
+              edge1 = riceSide.inner[station + 1],
+              normal0 = riceNormalAt(WETLAND_PTS[station], side),
+              normal1 = riceNormalAt(WETLAND_PTS[station + 1], side);
+            for (let lane = 0; lane < RICE_FIELD_LANE_COUNT; lane++) {
+              const laneStart = lane * RICE_FIELD_LANE_SPACING + 1.05,
+                laneEnd = (lane + 1) * RICE_FIELD_LANE_SPACING - 1.05,
+                kind = lane === 1 ? 'r' : 'g',
+                color = new THREE.Color(RICE_FIELD_LANE_COLORS[lane]).lerp(vWhite, 0.6);
+              for (let offset = laneStart; offset <= laneEnd; offset += cropAcrossSpacing) {
+                const startX = edge0.x + normal0.x * offset,
+                  startZ = edge0.z + normal0.z * offset,
+                  endX = edge1.x + normal1.x * offset,
+                  endZ = edge1.z + normal1.z * offset,
+                  dx = endX - startX,
+                  dz = endZ - startZ,
+                  segmentLength = Math.hypot(dx, dz),
+                  alongSteps = Math.max(1, Math.ceil(segmentLength / cropAlongSpacing)),
+                  tangentX = dx / (segmentLength || 1),
+                  tangentZ = dz / (segmentLength || 1);
+                for (let step = 0; step < alongSteps; step++) {
+                  const progress = (step + 0.5) / alongSteps,
+                    pathStation = station + progress,
+                    edgeFade = Math.max(0, Math.min(1, pathStation / 10, (lastStation - pathStation) / 10)),
+                    smoothFade = edgeFade * edgeFade * (3 - 2 * edgeFade);
+                  if (vrn() > 0.45 + 0.55 * smoothFade) continue;
+                  const normalX = normal0.x + (normal1.x - normal0.x) * progress,
+                    normalZ = normal0.z + (normal1.z - normal0.z) * progress,
+                    normalLength = Math.hypot(normalX, normalZ) || 1,
+                    nx = normalX / normalLength,
+                    nz = normalZ / normalLength,
+                    baseX = startX + dx * progress,
+                    baseZ = startZ + dz * progress,
+                    crossBundRow =
+                      Math.round(pathStation / RICE_FIELD_STATION_STEP) * RICE_FIELD_STATION_STEP;
+                  let nearCrossBund = false;
+                  if (crossBundRows.includes(crossBundRow)) {
+                    const bundEdge = riceSide.inner[crossBundRow],
+                      bundNormal = riceNormalAt(WETLAND_PTS[crossBundRow], side),
+                      bundX = bundEdge.x + bundNormal.x * offset,
+                      bundZ = bundEdge.z + bundNormal.z * offset;
+                    nearCrossBund =
+                      Math.hypot(baseX - bundX, baseZ - bundZ) < cropBundClearance;
+                  }
+                  if (nearCrossBund) continue;
+                  const key = side + ':' + kind;
+                  let group = cropGroups.get(key);
+                  if (!group) {
+                    group = { kind, arr: [], x: 0, z: 0, count: 0 };
+                    cropGroups.set(key, group);
+                  }
+                  const alongJitter = (vrn() - 0.5) * cropAlongSpacing * 0.35,
+                    acrossJitter = (vrn() - 0.5) * cropAcrossSpacing * 0.25,
+                    x = baseX + tangentX * alongJitter + nx * acrossJitter,
+                    z = baseZ + tangentZ * alongJitter + nz * acrossJitter,
+                    h = kind === 'r' ? 0.78 + vrn() * 0.2 : 0.55 + vrn() * 0.2,
+                    sw = h * 1.9;
+                  group.arr.push({
+                    x,
+                    y: 0.02,
+                    z,
+                    ry: Math.atan2(tangentX, tangentZ) + (vrn() - 0.5) * 0.45,
+                    rx: (vrn() - 0.5) * 0.1,
+                    rz: (vrn() - 0.5) * 0.1,
+                    sx: sw,
+                    sy: h,
+                    sz: sw,
+                    c: color.clone().multiplyScalar(0.9 + vrn() * 0.2)
+                  });
+                  group.x += x;
+                  group.z += z;
+                  group.count++;
+                }
+              }
+            }
+          }
+        }
+        for (const group of cropGroups.values()) {
+          const m = vMesh(group.kind === 'r' ? gRiceR : gRiceG, vMG, group.arr, true);
           if (m) {
             scene.add(m);
-            vFM.push({ m, x: q[0], z: q[1] });
+            vFM.push({
+              m,
+              x: group.x / group.count,
+              z: group.z / group.count,
+              maxDistance: 110,
+              reducedDistance: 95
+            });
           }
         }
       }
 
-      /* นาข้าวแปลงเล็กริมทาง: น้ำขัง คันนา และกอข้าว */
       const vWater = new THREE.MeshStandardMaterial({
-          color: 0x0284c7,
-          emissive: 0x0369a1,
-          emissiveIntensity: 0.25,
-          roughness: 0.08,
-          metalness: 0.12
-        }),
-        vMud = sm2(0x8b7a55);
-      for (const pd of PADS) {
-        const g = pd[0],
-          ripe = pd[1],
-          arr = [];
-        for (let r = 0; r < 12; r++)
-          for (let q = 0; q < 16; q++) {
-            const h = (ripe ? 0.62 : 0.5) + vrn() * 0.16;
-            arr.push({
-              x: (r - 5.5) * 0.52 + (vrn() - 0.5) * 0.1,
-              y: 0.04,
-              z: (q - 7.5) * 0.52 + (vrn() - 0.5) * 0.1,
-              ry: vrn() * 6.28,
-              rx: (vrn() - 0.5) * 0.1,
-              rz: (vrn() - 0.5) * 0.1,
-              sx: h * 1.3,
-              sy: h,
-              sz: h * 1.3,
-              c: vTint()
-            });
-          }
-        const w = new THREE.Mesh(new THREE.PlaneGeometry(6.1, 8.7).rotateX(-Math.PI / 2), vWater);
-        w.position.y = 0.062;
-        w.receiveShadow = true;
-        g.add(w);
-        for (const sz of [-1, 1]) box(6.7, 0.12, 0.3, vMud, 0, 0.06, sz * 4.5, g);
-        for (const sx of [-1, 1]) box(0.3, 0.12, 9.3, vMud, sx * 3.3, 0.06, 0, g);
-        const m = vMesh(ripe ? gRiceR : gRiceG, vMG, arr, false);
-        if (m) g.add(m);
-      }
+        color: 0x0284c7,
+        emissive: 0x0369a1,
+        emissiveIntensity: 0.25,
+        roughness: 0.08,
+        metalness: 0.12
+      });
 
       /* ============================================================================
        * scene/40-veg/05-cloud-shadow-fx.js
@@ -20225,8 +21252,9 @@
       // 1. ซ่อนสิ่งก่อสร้างและต้นไม้ที่อยู่นอกระยะสายตา
       for (let i = 0; i < cullTargets.length; i++) {
         const obj = cullTargets[i];
-        const dx = obj.position.x - cx;
-        const dz = obj.position.z - cz;
+        const cullCenter = (obj.userData && obj.userData.cullCenter) || obj.position;
+        const dx = cullCenter.x - cx;
+        const dz = cullCenter.z - cz;
         const distSq = dx * dx + dz * dz;
 
         // โมเดลขนาดใหญ่พิเศษ (เช่น โรงเรียน, 7-11) ใช้รัศมีกว้างพิเศษทั้งหน้าและหลัง ป้องกันอาการวาร์ปหายขณะขับผ่าน

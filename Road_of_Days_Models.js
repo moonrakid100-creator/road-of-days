@@ -932,20 +932,21 @@ window.ROD_Models = {
       trunk.castShadow = true;
       treeGrp.add(trunk);
 
-      const leafM = new THREE.MeshLambertMaterial({ color: colorHex, ...matOptions });
-      const leafShadeM = new THREE.MeshLambertMaterial({ color: colorHex, ...matOptions });
+      const leafM = new THREE.MeshLambertMaterial({ color: colorHex, flatShading: true, ...matOptions });
+      const leafShadeM = new THREE.MeshLambertMaterial({ color: colorHex, flatShading: true, ...matOptions });
       leafShadeM.color.multiplyScalar(0.78);
-      const leafLightM = new THREE.MeshLambertMaterial({ color: colorHex, ...matOptions });
+      const leafLightM = new THREE.MeshLambertMaterial({ color: colorHex, flatShading: true, ...matOptions });
       leafLightM.color.lerp(new THREE.Color(0xffffff), 0.16);
       const levels = [
         { y: 1.38, length: 1.02 },
         { y: 1.92, length: 0.76 },
         { y: 2.42, length: 0.48 }
       ];
+      const crownWind = (px - pz) * 0.025;
       levels.forEach((level, li) => {
         for (let b = 0; b < 4; b++) {
-          const angle = (b / 4) * Math.PI * 2 + li * 0.42,
-            direction = new THREE.Vector3(Math.cos(angle), 0.22, Math.sin(angle)).normalize(),
+          const angle = (b / 4) * Math.PI * 2 + li * 0.52,
+            direction = new THREE.Vector3(Math.cos(angle) + crownWind, 0.22, Math.sin(angle) - crownWind * 0.5).normalize(),
             length = level.length * (0.9 + ((b + li) % 3) * 0.06),
             start = new THREE.Vector3(0, level.y, 0),
             end = start.clone().addScaledVector(direction, length),
@@ -959,10 +960,13 @@ window.ROD_Models = {
           const leafMaterials = [leafM, leafShadeM, leafLightM],
             foliage = new THREE.Mesh(treeLeafGeo, leafMaterials[(b + li) % leafMaterials.length]);
           foliage.position.copy(end);
-          foliage.scale.set(0.68, 0.2, 0.28);
-          foliage.rotation.y = angle;
-          foliage.rotation.z = -direction.y * 0.5;
-          foliage.castShadow = li === 0;
+          const leafSize = 0.54 + ((b * 3 + li * 2) % 6) * 0.1;
+          if ((b + li * 2) % 4 === 0) {
+            foliage.scale.set(leafSize * 0.9, leafSize * 0.72, leafSize * 0.84);
+          } else {
+            foliage.scale.set(leafSize, 0.15 + leafSize * 0.11, 0.2 + leafSize * 0.2);
+          }
+          foliage.rotation.set((b % 3 - 1) * 0.08, angle + (b % 2 ? 0.12 : -0.08), -direction.y * 0.5);
           treeGrp.add(foliage);
         }
       });
